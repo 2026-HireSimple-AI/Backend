@@ -1,0 +1,29 @@
+# pip freeze > requirements.txt 개발 환경 세팅 완료 후 버전 업데이트  
+
+# Web Framework
+fastapi
+uvicorn
+
+# AI / LangChain
+langchain
+langchain-openai
+openai
+
+# RAG
+chromadb
+
+# File Processing
+pdfplumber
+python-docx
+
+# Database
+supabase
+psycopg2-binary
+
+# Auth
+python-jose
+passlib
+
+# Utils
+python-dotenv
+pydantic
