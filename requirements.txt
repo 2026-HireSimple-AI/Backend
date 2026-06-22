@@ -24,6 +24,13 @@ psycopg2-binary
 python-jose
 passlib
 
+# Web Scraping
+requests
+beautifulsoup4
+
+# FastAPI File Upload
+python-multipart
+
 # Utils
 python-dotenv
 pydantic
