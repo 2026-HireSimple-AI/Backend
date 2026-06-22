@@ -17,14 +17,83 @@ async def get_applicants(job_posting_id: int):
     if not response.data:
         raise HTTPException(status_code=404, detail="지원자가 없습니다.")
     
+    # 프론트 ApplicantSummary 구조에 맞게 변환
+    result = []
+    for applicant in response.data:
+        scores = applicant.get("applicant_scores", [])
+        score_data = scores[0] if scores else {}
+        result.append({
+            "id": applicant["id"],
+            "masked_code": applicant["masked_code"],
+            "career": f"경력 {applicant.get('career', '-')}",
+            "total_score": score_data.get("total_score", 0),
+            "requirement_score": score_data.get("requirement_score", 0),
+            "skill_score": score_data.get("skill_score", 0),
+            "task_score": score_data.get("task_score", 0),
+            "preference_score": score_data.get("preference_score", 0),
+        })
+
     # total_score 기준 내림차순 정렬 (화면에서 랭킹 1위, 2위, 3위 순서)
     sorted_data = sorted(
-        response.data, # 정렬할 대상 (지원자 목록)
-        key=lambda x: x["applicant_scores"][0]["total_score"] if x ["applicant_scores"] else 0,
+        result, # 정렬할 대상 (지원자 목록)
+        key=lambda x: x["total_score"],
         reverse=True # 내림차순 (높은 점수가 위로)
     )
     
-    return sorted_data
+    return {
+        "success":True,
+        "data": sorted_data
+    }
+
+@router.get("/applicants/{applicant_id}")
+async def get_applicant_detail(applicant_id: int):
+    """지원자 상세 정보 + 점수 조회"""
+    # 지원자 기본 정보 조회
+    applicant = supabase.table("applicants")\
+        .select("*")\
+        .eq("id", applicant_id)\
+        .execute()
+
+    if not applicant.data:
+        raise HTTPException(status_code=404, detail="지원자가 없습니다.")
+
+    # 종합 점수 조회
+    scores = supabase.table("applicant_scores")\
+        .select("*")\
+        .eq("applicant_id", applicant_id)\
+        .execute()
+
+    # 세부 점수 조회
+    detail_scores = supabase.table("detail_scores")\
+        .select("*")\
+        .eq("applicant_id", applicant_id)\
+        .execute()
+    
+    # 기술 스택 조회
+    skills = supabase.table("skills_stack")\
+        .select("skill_name")\
+        .eq("job_posting_id", applicant.data[0]["job_posting_id"])\
+        .execute()
+    
+    # 프론트가 기대하는 구조로 맞춤
+    score_data = scores.data[0] if scores.data else {}
+    matched_skills = [s["skill_name"] for s in skills.data] if skills.data else []
+
+    return {
+        "success": True,
+        "data": {
+            **applicant.data[0],
+            "score": {
+                "total_score": score_data.get("total_score", 0),
+                "requirement_score": score_data.get("requirement_score", 0),
+                "skill_score": score_data.get("skill_score", 0),
+                "task_score": score_data.get("task_score", 0),
+                "preference_score": score_data.get("preference_score", 0),
+            },
+            "detail_scores": detail_scores.data,
+            "matched_skills": matched_skills,
+        }
+    }
 
 @router.get("/applicants/{applicant_id}/scores")
 async def get_applicant_scores(applicant_id: int):
@@ -45,8 +114,11 @@ async def get_applicant_scores(applicant_id: int):
         raise HTTPException(status_code=404, detail="점수 데이터가 없습니다.")
 
     return {
-        "scores": scores.data,
-        "detail_scores": detail_scores.data
+        "success":True,
+        "data": {
+            "scores": scores.data,
+            "detail_scores": detail_scores.data
+        }
     }
 
 @router.get("/comparison-sets/{comparison_id}")
@@ -60,4 +132,7 @@ async def get_comparison(comparison_id: int):
     if not response.data:
         raise HTTPException(status_code=404, detail="비교 데이터가 없습니다.")
 
-    return response.dataㅇ
+    return {
+        "success":True,
+        "data": response.data
+    }
