@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import analysis
+from routers import analyze
 
 app = FastAPI()
 
@@ -13,5 +14,5 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 
-
 app.include_router(analysis.router)
+app.include_router(analyze.router)
