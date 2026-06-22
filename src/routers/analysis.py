@@ -120,6 +120,11 @@ async def get_applicant_detail(applicant_id: int):
             },
             "detail_scores": converted_detail_scores,
             "matched_skills": matched_skills,
+            "resume_summary": {
+                "career_summary": "",
+                "project_summary": "",
+                "skill_summary": ""
+            }
         }
     }
 
