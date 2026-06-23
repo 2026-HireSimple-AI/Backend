@@ -111,11 +111,44 @@ async def analyze_resume(applicant_id: int):
         scores = json.loads(result.content)
     except:
         raise HTTPException(status_code=500, detail="LLM 응답 파싱 실패")
+    
+    # 10. 종합 점수 계산
+    total_score = round(
+        (scores.get("requirement_score", 0) * 0.3) +
+        (skill_score * 0.3) +
+        (scores.get("task_score", 0) * 0.3) +
+        (scores.get("preference_score", 0) * 0.1),
+        2
+    )
+    
+    # 11. applicant_scores 저장
+    supabase.table("applicant_scores").upsert({
+        "applicant_id": applicant_id,
+        "job_posting_id": job_posting_id,
+        "total_score": total_score,
+        "requirement_score": scores.get("requirement_score", 0),
+        "skill_score": skill_score,
+        "task_score": scores.get("task_score", 0),
+        "preference_score": scores.get("preference_score", 0),
+    }).execute()
+
+    # 12. detail_scores 저장
+    for ds in scores.get("detail_scores", []):
+        supabase.table("detail_scores").upsert({
+            "applicant_id": applicant_id,
+            "type_criteria_id": next(
+                (dc["type_criteria_id"] for dc in detail_criteria.data
+                    if dc["id"] == ds["detail_criteria_id"]), None
+            ),
+            "detail_criteria_id": ds["detail_criteria_id"],
+            "score": ds["score"]
+        }).execute()
 
     return {
         "success": True,
         "data": {
             "applicant_id": applicant_id,
+            "total_score": total_score,
             "skill_score": skill_score,
             "matched_skills": matched_skills,
             "requirement_score": scores.get("requirement_score", 0),
