@@ -90,8 +90,14 @@ async def get_applicant_detail(applicant_id: int):
         detail_criteria = detail_criteria_map.get(ds.get("detail_criteria_id"), {})
         score = ds.get("score", 0)
         weight = detail_criteria.get("weight", 0)
+
+        # detail이 없거나 weight가 0이면 제외
+        if not detail_criteria.get("detail") or weight == 0:
+            continue
+
         converted_detail_scores.append({
             "criterion_type": type_criteria.get("criterion_type", ""),
+            "type_weight": type_criteria.get("type_weight", 0),
             "score": score,
             "weight": weight,
             "weighted_score": round(score * weight / 100, 1)
