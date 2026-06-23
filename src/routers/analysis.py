@@ -68,6 +68,34 @@ async def get_applicant_detail(applicant_id: int):
         .select("*")\
         .eq("applicant_id", applicant_id)\
         .execute()
+
+    # type_criteria 조회
+    type_criteria_list = supabase.table("type_criteria")\
+        .select("*")\
+        .execute()
+
+    # detail_criteria 조회
+    detail_criteria_list = supabase.table("detail_criteria")\
+        .select("*")\
+        .execute()
+
+    # 딕셔너리로 변환 (빠른 조회용)
+    type_criteria_map = {tc["id"]: tc for tc in type_criteria_list.data}
+    detail_criteria_map = {dc["id"]: dc for dc in detail_criteria_list.data}
+
+    # 프론트 구조에 맞게 변환
+    converted_detail_scores = []
+    for ds in detail_scores.data:
+        type_criteria = type_criteria_map.get(ds.get("type_criteria_id"), {})
+        detail_criteria = detail_criteria_map.get(ds.get("detail_criteria_id"), {})
+        score = ds.get("score", 0)
+        weight = detail_criteria.get("weight", 0)
+        converted_detail_scores.append({
+            "criterion_type": type_criteria.get("criterion_type", ""),
+            "score": score,
+            "weight": weight,
+            "weighted_score": round(score * weight / 100, 1)
+        })
     
     # 기술 스택 조회
     skills = supabase.table("skills_stack")\
@@ -90,34 +118,13 @@ async def get_applicant_detail(applicant_id: int):
                 "task_score": score_data.get("task_score", 0),
                 "preference_score": score_data.get("preference_score", 0),
             },
-            "detail_scores": detail_scores.data,
+            "detail_scores": converted_detail_scores,
             "matched_skills": matched_skills,
-        }
-    }
-
-@router.get("/applicants/{applicant_id}/scores")
-async def get_applicant_scores(applicant_id: int):
-    """지원자 상세 점수 조회"""
-    # 종합 점수 조회
-    scores = supabase.table("applicant_scores")\
-        .select("*")\
-            .eq("applicant_id", applicant_id)\
-                .execute()
-    
-    # 세부 점수 조회
-    detail_scores = supabase.table("detail_scores")\
-        .select("*")\
-            .eq("applicant_id", applicant_id)\
-                .execute()
-    
-    if not scores.data:
-        raise HTTPException(status_code=404, detail="점수 데이터가 없습니다.")
-
-    return {
-        "success":True,
-        "data": {
-            "scores": scores.data,
-            "detail_scores": detail_scores.data
+            "resume_summary": {
+                "career_summary": "",
+                "project_summary": "",
+                "skill_summary": ""
+            }
         }
     }
 
