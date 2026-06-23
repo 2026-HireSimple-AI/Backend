@@ -25,7 +25,7 @@ async def get_applicants(job_posting_id: int):
         result.append({
             "id": applicant["id"],
             "masked_code": applicant["masked_code"],
-            "career": f"경력 {applicant.get('career', '-')}",
+            "career": f"경력 {applicant.get('career')}" if applicant.get('career') else "신입",
             "total_score": score_data.get("total_score", 0),
             "requirement_score": score_data.get("requirement_score", 0),
             "skill_score": score_data.get("skill_score", 0),
