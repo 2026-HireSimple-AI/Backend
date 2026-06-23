@@ -113,6 +113,54 @@ async def get_applicant_detail(applicant_id: int):
     score_data = scores.data[0] if scores.data else {}
     matched_skills = [s["skill_name"] for s in skills.data] if skills.data else []
 
+    # 이력서 텍스트 조회
+    resume = supabase.table("resume_files")\
+        .select("extracted_text")\
+        .eq("applicant_id", applicant_id)\
+        .execute()
+
+    # LLM 이력서 요약
+    from langchain_openai import ChatOpenAI
+    from langchain_core.prompts import PromptTemplate
+    import json
+    import os
+
+    llm = ChatOpenAI(
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        temperature=0,
+        openai_api_key=os.getenv("OPENAI_API_KEY")
+    )
+
+    resume_summary = {
+        "career_summary": "",
+        "project_summary": "",
+        "skill_summary": ""
+    }
+
+    if resume.data and resume.data[0].get("extracted_text"):
+        summary_prompt = PromptTemplate(
+            input_variables=["resume"],
+            template="""
+아래 이력서를 읽고 3가지로 요약해주세요.
+
+[이력서]
+{resume}
+
+아래 JSON 형식으로만 응답하세요. 다른 설명은 절대 하지 마세요.
+{{
+    "career_summary": "총 경력 : X년\\n\\n• 직무1\\n\\n• 직무2",
+    "project_summary": "• 프로젝트1\\n\\n• 프로젝트2",
+    "skill_summary": "• 기술1\\n\\n• 기술2\\n\\n• 기술3"
+}}
+"""
+)
+        chain = summary_prompt | llm
+        result = chain.invoke({"resume": resume.data[0]["extracted_text"]})
+        try:
+            resume_summary = json.loads(result.content)
+        except:
+            pass
+
     return {
         "success": True,
         "data": {
@@ -126,11 +174,7 @@ async def get_applicant_detail(applicant_id: int):
             },
             "detail_scores": converted_detail_scores,
             "matched_skills": matched_skills,
-            "resume_summary": {
-                "career_summary": "",
-                "project_summary": "",
-                "skill_summary": ""
-            }
+            "resume_summary": resume_summary
         }
     }
 
