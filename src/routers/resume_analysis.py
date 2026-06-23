@@ -6,7 +6,7 @@ router = APIRouter(
     tags=["resume-analysis"]
 )
 
-@router.post("/applicants/{applicants_id}/analyze")
+@router.post("/applicants/{applicant_id}/analyze")
 async def analyze_resume(applicant_id: int):
     """이력서 적합도 분석 실행"""
 
