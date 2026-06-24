@@ -18,7 +18,7 @@ def scrape_job_posting(url):
         "title": None,
         "input_type": "url",
         "source_url": url,
-        'raw_content': None,
+        "raw_content": None,
         "conts_summary": None
         }
 
@@ -46,15 +46,16 @@ def scrape_job_posting(url):
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
         title = soup.select("h1.tit_job")[0].text.strip()
+        result["title"] = title
         cont = soup.select_one("div.cont")
 
         if cont:
             lines = [l.strip() for l in cont.text.split("\n") if l.strip()]
             detail = {}
             for i in range(1, len(lines), 2):
-                if lines[i - 1] == "지도보기":
-                    break
                 detail[lines[i - 1]] = lines[i]
+                if lines[i - 1] == "근무형태":
+                    break
             result["conts_summary"] = detail
 
     except Exception as e:
@@ -81,11 +82,11 @@ def scrape_job_posting(url):
         text3_text = text3_locator.get_text(strip=True) if text3_locator else ""
 
         if text1:
-            data = text1.get_text(strip=True)
+            data = text1.get_text(strip=True).replace("\xa0", " ")
         elif text2:
-            data = text2.get_text(strip=True)
+            data = text2.get_text(strip=True).replace("\xa0", " ")
         elif text3_text:
-            data = text3_text
+            data = text3_text.replace("\xa0", " ")
         else:
             images = contents.select("img") if contents else []
             data = []
@@ -96,7 +97,7 @@ def scrape_job_posting(url):
                 if src.startswith("//"):
                     src = "https:" + src
                 data.append(src)
-        result["content"] = data
+        result["raw_content"] = data
 
     except Exception as e:
         print(f"[view-detail 실패] {rec_idx}: {e}")
