@@ -157,3 +157,37 @@ async def analyze_resume(applicant_id: int):
             "detail_scores": scores.get("detail_scores", [])
         }
     }
+
+@router.post("/job-postings/{job_posting_id}/analyze-all")
+async def analyze_all_resumes(job_posting_id: int):
+    """해당 공고의 모든 지원자 이력서 일괄 분석"""
+    applicants = supabase.table("applicants")\
+        .select("id")\
+        .eq("job_posting_id", job_posting_id)\
+        .execute()
+
+    if not applicants.data:
+        raise HTTPException(status_code=404, detail="지원자가 없습니다.")
+
+    results = []
+    for applicant in applicants.data:
+        try:
+            await analyze_resume(applicant["id"])
+            results.append({
+                "applicant_id": applicant["id"],
+                "status": "success"
+            })
+        except Exception as e:
+            results.append({
+                "applicant_id": applicant["id"],
+                "status": "failed",
+                "error": str(e)
+            })
+
+    return {
+        "success": True,
+        "data": {
+            "total": len(applicants.data),
+            "results": results
+        }
+    }
