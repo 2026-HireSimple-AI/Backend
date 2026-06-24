@@ -1,102 +1,104 @@
+import requests
+from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
-from fastapi import HTTPException
-from playwright.sync_api import sync_playwright
 
-def scrape_job_posting(url: str):
-    print("서비스 들어옴 - sync 버전")
+def scrape_job_posting(url):
+    rec_idx = parse_qs(urlparse(url).query)["rec_idx"][0]
 
-    id_list = parse_qs(urlparse(url).query).get("rec_idx")
-    print("rec_idx 파싱 완료")
+    session = requests.Session()
+    session.headers.update({
+        "accept": "text/html, */*; q=0.01",
+        "accept-language": "ko",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+        "x-requested-with": "XMLHttpRequest",
+    })
 
-    if not id_list:
-        raise HTTPException(status_code=400, detail="rec_idx가 없는 url입니다.")
+    result = {
+        "url": url,
+        "title": None,
+        "input_type": "url",
+        "source_url": url,
+        'raw_content': None,
+        "conts_summary": None
+        }
 
-    rec_idx = id_list[0]
+    # ---- 1번째 요청: view-ajax (POST) → 요약 정보 테이블 ----
+    ajax_url = "https://www.saramin.co.kr/zf_user/jobs/relay/view-ajax"
+    ajax_payload = {
+        "rec_idx": rec_idx,
+        "rec_seq": "0",
+        "view_type": "list",
+        "t_ref": "",
+        "t_ref_content": "",
+        "ref_dp": "SRI_050_VIEW_MIX_RCT_NONMEM",
+    }
 
-    with sync_playwright() as p:
-        print("playwright 시작")
-        browser = p.chromium.launch(headless=True, slow_mo=300)
-        print("브라우저 실행 완료")
-        page = browser.new_page(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
-            )
+    try:
+        res = session.post(
+            ajax_url,
+            data=ajax_payload,
+            headers={
+                "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "origin": "https://www.saramin.co.kr",
+                "referer": url,
+            },
         )
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, "html.parser")
+        title = soup.select("h1.tit_job")[0].text.strip()
+        cont = soup.select_one("div.cont")
 
-        print("페이지 생성 완료")
+        if cont:
+            lines = [l.strip() for l in cont.text.split("\n") if l.strip()]
+            detail = {}
+            for i in range(1, len(lines), 2):
+                if lines[i - 1] == "지도보기":
+                    break
+                detail[lines[i - 1]] = lines[i]
+            result["conts_summary"] = detail
 
-        try:
-            try:
-                page.goto("https://www.saramin.co.kr", wait_until="commit", timeout=30000)
-                print("사람인 접속")
-            except Exception as e:
-                print("사람인 메인 접속 실패:", e)
-                print("현재 URL:", page.url)
-                print("제목:", page.title())
+    except Exception as e:
+        print(f"[view-ajax 실패] {rec_idx}: {e}")
 
-            title = (page.locator("h1.tit_job").first.text_content() or "").strip()
-            details = page.locator("div.col > dl > dd")
+    # ---- 2번째 요청: view-detail (GET) → 실제 본문 ----
+    detail_url = (
+        "https://www.saramin.co.kr/zf_user/jobs/relay/view-detail"
+        f"?rec_idx={rec_idx}&rec_seq=0"
+        "&t_category=non-logged_relay_view&t_content=view_detail"
+        "&t_ref=&t_ref_content="
+    )
 
-            d_list = []
-            for i in range(3):
-                detail = details.nth(i).text_content()
-                d_list.append((detail or "").strip())
+    try:
+        res = session.get(detail_url, headers={"referer": url})
+        res.raise_for_status()
+        res.encoding = res.apparent_encoding
+        detail_soup = BeautifulSoup(res.text, "html.parser")
 
-            career = d_list[0] if len(d_list) > 0 else ""
-            education = d_list[1] if len(d_list) > 1 else ""
-            employment_type = d_list[2] if len(d_list) > 2 else ""
+        contents = detail_soup.select_one("div.user_content")
+        text1 = contents.select_one("div.job-content") if contents else None
+        text2 = contents.select_one("div.content") if contents else None
+        text3_locator = detail_soup.select_one("body > div > div > div:nth-child(2)")
+        text3_text = text3_locator.get_text(strip=True) if text3_locator else ""
 
-            result = {
-                "title": title,
-                "url": url,
-                "career": career,
-                "education": education,
-                "employment_type": employment_type,
-            }
+        if text1:
+            data = text1.get_text(strip=True)
+        elif text2:
+            data = text2.get_text(strip=True)
+        elif text3_text:
+            data = text3_text
+        else:
+            images = contents.select("img") if contents else []
+            data = []
+            for img in images:
+                src = img.get("src")
+                if not src:
+                    continue
+                if src.startswith("//"):
+                    src = "https:" + src
+                data.append(src)
+        result["content"] = data
 
-            detail_url = (
-                f"https://www.saramin.co.kr/zf_user/jobs/relay/view-detail"
-                f"?rec_idx={rec_idx}"
-            )
+    except Exception as e:
+        print(f"[view-detail 실패] {rec_idx}: {e}")
 
-            page.goto(detail_url, timeout=60000)
-
-            contents = page.locator("div.user_content")
-
-            text1 = contents.locator("div.job-content")
-            text2 = contents.locator("div.content")
-            text3_locator = page.locator("body > div > div > div:nth-child(2)")
-            images = contents.locator("img")
-
-            text3_text = ""
-            if text3_locator.count():
-                text3_text = (text3_locator.text_content() or "").strip()
-
-            if text1.count():
-                data = (text1.text_content() or "").strip()
-            elif text2.count():
-                data = (text2.text_content() or "").strip()
-            elif text3_text:
-                data = text3_text
-            else:
-                image_list = []
-                img_count = images.count()
-
-                for i in range(img_count):
-                    src = images.nth(i).get_attribute("src")
-
-                    if not src:
-                        continue
-
-                    if src.startswith("//"):
-                        src = "https:" + src
-
-                    image_list.append(src)
-
-                data = image_list
-
-            result["content"] = data
-            return result
-
-        finally:
-            browser.close()
+    return result
