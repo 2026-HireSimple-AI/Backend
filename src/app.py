@@ -1,6 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from routers import analysis, job_posting_upload
+from routers import resume_analysis
+
 
 app = FastAPI()
 
@@ -18,3 +21,4 @@ app.add_middleware(
 
 app.include_router(analysis.router)
 app.include_router(job_posting_upload.router)
+app.include_router(resume_analysis.router)
