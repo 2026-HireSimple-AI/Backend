@@ -2,7 +2,6 @@ from urllib.parse import urlparse, parse_qs
 from fastapi import HTTPException
 from playwright.sync_api import sync_playwright
 
-
 def scrape_job_posting(url: str):
     print("서비스 들어옴 - sync 버전")
 
@@ -20,19 +19,20 @@ def scrape_job_posting(url: str):
         print("브라우저 실행 완료")
         page = browser.new_page(
             user_agent=(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
             )
         )
 
         print("페이지 생성 완료")
 
         try:
-            page.goto("https://www.saramin.co.kr", wait_until="commit", timeout=30000)
-            print("사람인 접속")
-            page.goto(url, wait_until="commit", timeout=60000)
-            print("첫 페이지 이동 완료")
+            try:
+                page.goto("https://www.saramin.co.kr", wait_until="commit", timeout=30000)
+                print("사람인 접속")
+            except Exception as e:
+                print("사람인 메인 접속 실패:", e)
+                print("현재 URL:", page.url)
+                print("제목:", page.title())
 
             title = (page.locator("h1.tit_job").first.text_content() or "").strip()
             details = page.locator("div.col > dl > dd")
