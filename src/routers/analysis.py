@@ -98,6 +98,7 @@ async def get_applicant_detail(applicant_id: int):
         converted_detail_scores.append({
             "criterion_type": type_criteria.get("criterion_type", ""),
             "type_weight": type_criteria.get("type_weight", 0),
+            "detail": detail_criteria.get("detail", ""),
             "score": score,
             "weight": weight,
             "weighted_score": round(score * weight / 100, 1)
