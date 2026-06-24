@@ -9,9 +9,6 @@ langchain
 langchain-openai
 openai
 
-# RAG
-chromadb
-
 # File Processing
 pdfplumber
 python-docx
@@ -24,6 +21,10 @@ psycopg2-binary
 python-jose
 passlib
 
+# HTTP Client
+httpx
+
 # Utils
 python-dotenv
 pydantic
+python-multipart
