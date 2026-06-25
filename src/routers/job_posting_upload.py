@@ -126,6 +126,6 @@ def upload_job_posting(req: UrlRequest):
             "job_posting_id": job_posting_id,
             "skill_name": skill,
             "sort_order": None
-        })
+        }).execute()
 
     return result
