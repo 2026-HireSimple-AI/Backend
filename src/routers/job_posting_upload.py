@@ -17,10 +17,9 @@ class UrlRequest(BaseModel):
 @router.post("/upload")
 def upload_job_posting(req: UrlRequest):
     result = scrape_job_posting(req.url)
-    print(result)
 
     supabase.table("job_postings").upsert({
-    "user_id": "1",
+    "user_id": None,
     "title": result['title'],
     "input_type": result["input_type"],
     "source_url": result["source_url"],
