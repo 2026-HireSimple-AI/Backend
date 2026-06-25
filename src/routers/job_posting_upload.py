@@ -34,7 +34,8 @@ def upload_job_posting(req: UrlRequest):
     result = scrape_job_posting(req.url)
     print(result)
 
-    supabase.table("job_postings").upsert({
+    response = (
+        supabase.table("job_postings").upsert({
     "user_id": None,
     "title": result['title'],
     "input_type": result["input_type"],
@@ -42,6 +43,9 @@ def upload_job_posting(req: UrlRequest):
     "raw_content": result["raw_content"],
     "conts_summary": result["conts_summary"]
     }).execute()
+    )
+
+    job_posting_id = response.data[0]["id"]
 
     title = result['title']
     summary = json_to_str(result["conts_summary"])
@@ -53,6 +57,7 @@ def upload_job_posting(req: UrlRequest):
     #     raw_image_posting = extract_job_posting_text(result["raw_content"])
     #     formatted_posting = job_posting_formating(title, summary, raw_image_posting)
 
+    # 자격조건, 기술스택, 주요업무, 우대사항이 무조건 나오게 하기
     REQUIRED_FIELDS = ["requirement", "skill_stack", "task", "preference"]
 
     def has_required_values(formatted_posting):
@@ -68,8 +73,40 @@ def upload_job_posting(req: UrlRequest):
                 return False
 
         return True
+    
+    # 원본 채용 공고가 문자 -> job_posting_formating
+    # 원본 채용 공고가 이미지 -> extract_job_posting_text
+    raw_content = result["raw_content"]
+
+    if isinstance(raw_content, str) and raw_content.startswith("http"):
+        posting_text = extract_job_posting_text(raw_content, is_url=True)
+
+    elif isinstance(raw_content, list) and raw_content:
+        posting_text = extract_job_posting_text(raw_content, is_url=True)
+
+    else:
+        posting_text = raw_content
+
+    # 4가지 조건들 안 나올 때 10번 다시 돌려서 확인
+    max_retry = 10
+
+    for i in range(max_retry):
+        formatted_posting = job_posting_formating(title, summary, posting_text)
+
+        if has_required_values(formatted_posting):
+            break
+
+        print(f"필수 항목 누락, 재시도 {i + 1}/{max_retry}")
+        print(formatted_posting)
+
+    else:
+        raise ValueError(f"필수 항목 추출 실패: {formatted_posting}")
 
     for category in formatted_posting.keys():
+        # 기술 스택은 따로 저장
+        if category == "skill_stack":
+            continue
+
         sorted_id = {
             "requirement": 1,
             "task": 2,
@@ -78,8 +115,17 @@ def upload_job_posting(req: UrlRequest):
         
         if formatted_posting.get(category, 0):
             supabase.table("formatted_postings").upsert({
+            "job_posting_id": job_posting_id,
             "category": category,
             "content": formatted_posting[category],
             "sort_order": sorted_id
             }).execute()
+        
+    for skill in formatted_posting["skill_stack"]:
+        supabase.table("skills_stack").upsert({
+            "job_posting_id": job_posting_id,
+            "skill_name": skill,
+            "sort_order": None
+        })
+
     return result
