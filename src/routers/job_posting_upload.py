@@ -3,8 +3,8 @@
 # 여기서 포메팅까지 해서 DB 저장까지 하자
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-
 from routers.job_posting_service import scrape_job_posting
+from database import supabase
 
 router = APIRouter(
     prefix="/job-posting",
@@ -17,5 +17,14 @@ class UrlRequest(BaseModel):
 @router.post("/upload")
 def upload_job_posting(req: UrlRequest):
     result = scrape_job_posting(req.url)
-    print(result)
+
+    supabase.table("job_postings").upsert({
+    "user_id": None,
+    "title": result['title'],
+    "input_type": result["input_type"],
+    "source_url": result["source_url"],
+    "raw_content": result["raw_content"],
+    "conts_summary": result["conts_summary"]
+    }).execute()
+
     return result
