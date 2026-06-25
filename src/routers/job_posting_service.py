@@ -1,6 +1,6 @@
 from urllib.parse import urlparse, parse_qs
 from fastapi import HTTPException
-from playwright.sync_api import sync_playwright
+# from playwright.sync_api import sync_playwright
 
 def scrape_job_posting(url: str):
     print("서비스 들어옴 - sync 버전")

@@ -1,22 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 from routers import analysis, interview, job_posting_upload, resume_analysis
-from rag.loader import load_all_documents
-from rag.store import init_vector_store
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # 서버 시작 시 RAG 초기화
-    print("[RAG] 공정채용 법령 문서 로딩 시작...")
-    docs = load_all_documents()
-    init_vector_store(docs)
-    print("[RAG] 초기화 완료")
-    yield
-
-
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,

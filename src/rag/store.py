@@ -9,6 +9,7 @@ from database import supabase
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
+_initialized = False
 
 
 async def _get_embedding(text: str) -> List[float]:
@@ -79,8 +80,20 @@ def init_vector_store(docs: List[Dict]) -> None:
     print(f"[RAG] Supabase 임베딩 저장 완료")
 
 
+def _ensure_initialized() -> None:
+    """최초 호출 시 PDF 로딩 + Supabase 저장 (lazy init)"""
+    global _initialized
+    if _initialized:
+        return
+    from rag.loader import load_all_documents
+    docs = load_all_documents()
+    init_vector_store(docs)
+    _initialized = True
+
+
 async def retrieve(query: str, n_results: int = 6) -> str:
     """쿼리와 유사한 법령 청크를 Supabase RPC로 검색"""
+    _ensure_initialized()
     try:
         query_embedding = await _get_embedding(query)
 
