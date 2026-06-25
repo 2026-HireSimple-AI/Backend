@@ -53,16 +53,16 @@ def upload_job_posting(req: UrlRequest):
         raw_image_posting = extract_job_posting_text(result["raw_content"])
         formatted_posting = job_posting_formating(title, summary, raw_image_posting)
 
-    # for category in formatted_posting.keys():
-    #     sorted_id = {
-    #         "requirement": 1,
-    #         "task": 2,
-    #         "preference": 3,
-    #     }.get(category, None)
-    #     if formatted_posting.get(category, 0):
-    #         supabase.table("formatted_postings").upsert({
-    #         "category": category,
-    #         "content": formatted_posting[category],
-    #         "sort_order": sorted_id
-    #         }).execute()
+    for category in formatted_posting.keys():
+        sorted_id = {
+            "requirement": 1,
+            "task": 2,
+            "preference": 3,
+        }.get(category, None)
+        if formatted_posting.get(category, 0):
+            supabase.table("formatted_postings").upsert({
+            "category": category,
+            "content": formatted_posting[category],
+            "sort_order": sorted_id
+            }).execute()
     return result
