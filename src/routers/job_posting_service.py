@@ -50,7 +50,7 @@ def parse_summary(soup):
 
         if key == "근무지역":
             break
-        
+
     return result
 
 def scrape_job_posting(url):
@@ -344,62 +344,88 @@ def job_posting_formating(
         summary:str,
         raw_posting:str,
         model: str = "gpt-4o-mini",
+        temperature: float = 0,
         ) -> dict:
     
     prompt = ChatPromptTemplate.from_template(
-"""공고문을 보고 아래 형식으로 분류해줘.
-“자격조건, 기술스택, 주요업무, 우대사항” 이 4가지 카테고리들은 **필수로** 분류해줘.
-**카테고리간 조건 이동금지!**
-추출할 때, 특히 우대사항이 명시되어 있으면 다른 조건을 추가하지마.
+"""
+공고문을 보고 채용 조건을 JSON으로 분류해줘.
 
-아래 예시는 헷갈리는 카테고리들만 예시로 들어봤어.
-경력: (있으면)
-학력 조건: (있으면)
+가장 중요한 규칙:
+- "requirement", "skill_stack", "task", "preference" 4개 필드는 반드시 값을 채워야 한다.
+- 원문에 정확히 같은 제목이 없어도, 의미상 해당하는 내용을 찾아서 반드시 분류한다.
+- 단, 원문에 전혀 근거가 없는 내용을 새로 만들면 안 된다.
+- 내용이 부족하면 title, summary, raw_posting 전체를 함께 보고 추론 가능한 범위에서 분류한다.
+- 그래도 정말 근거가 없으면 "확인 필요"라고 적는다.
+- 절대 빈 문자열 ""로 두지 마라.
 
-자격조건: 
+분류 기준:
+career:
+- 경력 조건
+- 예: 신입, 경력 3년 이상, 무관
+
+education:
+- 학력 조건
+- 예: 학력무관, 대졸 이상
+
+requirement:
+- 지원자가 반드시 갖춰야 하는 자격조건
 - 전공 조건
-- 특정 경험 필수
-- 특정 기술 사용 경험 필수
+- 필수 경험
+- 필수 기술 사용 경험
+- 경력/학력 외의 지원 필수 조건
 
-기술스택: 
-(예시)
-- Java
-- Python
-- Spring
-- React
-- Docker
-- AWS
+skill_stack:
+- 공고에 등장하는 기술, 언어, 프레임워크, DB, 클라우드, 협업 도구
+- 예: Java, Python, Spring, React, Docker, AWS, PostgreSQL, Git
 
-주요업무: (입사 후 수행할 업무)
-(예시)
-- API 개발
-- 운영 자동화
-- 데이터 파이프라인 구축
+task:
+- 입사 후 실제 수행할 주요업무
+- 예: API 개발, 서비스 유지보수, 데이터 파이프라인 구축, 운영 자동화
 
-필드: (있으면)
-(예시)
-- 의료 업계
-- 요식업
+preference:
+- 우대사항
+- "우대", "선호", "~경험자", "~가능자"처럼 필수가 아닌 가산 조건
+- 우대사항이 명시되어 있으면 원문에 있는 우대사항만 넣는다.
+- 우대사항이 명시되어 있지 않으면 "확인 필요"라고 적는다.
 
-아래의 형식에 맞춰서 출력해줘.
+field:
+- 산업/도메인
+- 예: 의료, 교육, 커머스, 요식업, 금융
+
+금지 규칙:
+- 카테고리 간 조건을 이동하지 마라.
+- 우대사항에 없는 조건을 임의로 추가하지 마라.
+- 원문에 없는 기술스택을 상상해서 추가하지 마라.
+- JSON 밖에 설명을 붙이지 마라.
+- 마크다운 코드블록을 쓰지 마라.
+- OUTPUT: 같은 접두어를 붙이지 마라.
 
 INPUT:
+title:
 {title}
+
+summary:
 {summary}
+
+raw_posting:
 {raw_posting}
 
-OUTPUT:
-career: 
-education: 
-requirement: 
-skill_stack: 
-task: 
-preference:
-field: 
+반드시 아래 JSON 형식으로만 답변해라.
+
+{{
+    "career": "",
+    "education": "",
+    "requirement": [],
+    "skill_stack": [],
+    "task": [],
+    "preference": [],
+    "field": []
+}}
 """
     )
-
-    chain = prompt | model | JsonOutputParser()
+    llm = ChatOpenAI(model=model, temperature=temperature)
+    chain = prompt | llm | JsonOutputParser()
     result = chain.invoke({"title": title, "summary": summary, "raw_posting": raw_posting})
 
     return result
