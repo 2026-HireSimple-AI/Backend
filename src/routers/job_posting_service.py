@@ -286,11 +286,9 @@ def _prepare_image_parts(
 
     return parts
 
-
 def _bytes_to_data_url(image_bytes: bytes, mime_type: str) -> str:
     encoded = base64.b64encode(image_bytes).decode("utf-8")
     return f"data:{mime_type};base64,{encoded}"
-
 
 def extract_job_posting_text(
     image_sources: Union[Union[str, Path], list[Union[str, Path]]],
@@ -340,67 +338,67 @@ def extract_job_posting_text(
     response = llm.invoke([message])
     return response.content.strip()
 
-# def job_posting_formating(
-#         title:str,
-#         summary:str,
-#         raw_posting:str,
-#         model: str = "gpt-4o-mini",
-#         ) -> dict:
+def job_posting_formating(
+        title:str,
+        summary:str,
+        raw_posting:str,
+        model: str = "gpt-4o-mini",
+        ) -> dict:
     
-#     prompt = ChatPromptTemplate.from_template(
-# """공고문을 보고 아래 형식으로 분류해줘.
-# “자격조건, 기술스택, 주요업무, 우대사항” 이 4가지 카테고리들은 **필수로** 분류해줘.
-# **카테고리간 조건 이동금지!**
-# 추출할 때, 특히 우대사항이 명시되어 있으면 다른 조건을 추가하지마.
+    prompt = ChatPromptTemplate.from_template(
+"""공고문을 보고 아래 형식으로 분류해줘.
+“자격조건, 기술스택, 주요업무, 우대사항” 이 4가지 카테고리들은 **필수로** 분류해줘.
+**카테고리간 조건 이동금지!**
+추출할 때, 특히 우대사항이 명시되어 있으면 다른 조건을 추가하지마.
 
-# 아래 예시는 헷갈리는 카테고리들만 예시로 들어봤어.
-# 경력: (있으면)
-# 학력 조건: (있으면)
+아래 예시는 헷갈리는 카테고리들만 예시로 들어봤어.
+경력: (있으면)
+학력 조건: (있으면)
 
-# 자격조건: 
-# - 전공 조건
-# - 특정 경험 필수
-# - 특정 기술 사용 경험 필수
+자격조건: 
+- 전공 조건
+- 특정 경험 필수
+- 특정 기술 사용 경험 필수
 
-# 기술스택: 
-# (예시)
-# - Java
-# - Python
-# - Spring
-# - React
-# - Docker
-# - AWS
+기술스택: 
+(예시)
+- Java
+- Python
+- Spring
+- React
+- Docker
+- AWS
 
-# 주요업무: (입사 후 수행할 업무)
-# (예시)
-# - API 개발
-# - 운영 자동화
-# - 데이터 파이프라인 구축
+주요업무: (입사 후 수행할 업무)
+(예시)
+- API 개발
+- 운영 자동화
+- 데이터 파이프라인 구축
 
-# 필드: (있으면)
-# (예시)
-# - 의료 업계
-# - 요식업
+필드: (있으면)
+(예시)
+- 의료 업계
+- 요식업
 
-# 아래의 형식에 맞춰서 출력해줘.
+아래의 형식에 맞춰서 출력해줘.
 
-# INPUT:
-# {title}
-# {summary}
-# {raw_posting}
+INPUT:
+{title}
+{summary}
+{raw_posting}
 
-# OUTPUT:
-# career: 
-# education: 
-# requirement: 
-# skill_stack: 
-# task: 
-# preference:
-# field: 
-# """
-#     )
+OUTPUT:
+career: 
+education: 
+requirement: 
+skill_stack: 
+task: 
+preference:
+field: 
+"""
+    )
 
-#     chain = prompt | model | JsonOutputParser()
-#     result = chain.invoke({"title": title, "summary": summary, "raw_posting": raw_posting})
+    chain = prompt | model | JsonOutputParser()
+    result = chain.invoke({"title": title, "summary": summary, "raw_posting": raw_posting})
 
-#     return result
+    return result
