@@ -43,15 +43,15 @@ def upload_job_posting(req: UrlRequest):
     "conts_summary": result["conts_summary"]
     }).execute()
 
-    # title = result['title']
-    # summary = json_to_str(result["conts_summary"])
+    title = result['title']
+    summary = json_to_str(result["conts_summary"])
 
-    # if result["raw_content"] == str:
-    #     raw_posting = result["raw_content"]
-    #     formatted_posting = job_posting_formating(title, summary, raw_posting)
-    # else:
-    #     raw_image_posting = extract_job_posting_text(result["raw_content"])
-    #     formatted_posting = job_posting_formating(title, summary, raw_image_posting)
+    if result["raw_content"] == str:
+        raw_posting = result["raw_content"]
+        formatted_posting = job_posting_formating(title, summary, raw_posting)
+    else:
+        raw_image_posting = extract_job_posting_text(result["raw_content"])
+        formatted_posting = job_posting_formating(title, summary, raw_image_posting)
 
     # for category in formatted_posting.keys():
     #     sorted_id = {
