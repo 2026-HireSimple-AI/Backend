@@ -2,6 +2,43 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 
+def clean(text):
+    return text.replace("\xa0", "").strip()
+
+def parse_summary(soup):
+    result = {}
+    for dl in soup.select("div.cont dl"):
+        dt = dl.find("dt")
+        dd = dl.find("dd")
+        if not dt or not dd:
+            continue
+
+        key = clean(dt.get_text())
+        if key == "근무조건":
+            break
+
+        tooltip_wrap = dd.select_one(".toolTipWrap")
+        details = []
+        if tooltip_wrap:
+            for li in tooltip_wrap.select(".toolTipCont li"):
+                label_tag = li.find("span")
+                if label_tag:
+                    label = clean(label_tag.get_text())
+                    label_tag.extract()
+                    value = clean(li.get_text())
+                    details.append({label: value})
+                else:
+                    details.append(clean(li.get_text()))
+            tooltip_wrap.extract()
+
+        for btn in dd.select("button"):
+            btn.extract()
+
+        main_text = clean(dd.get_text(" "))
+        result[key] = details if details else main_text
+
+    return result
+
 def scrape_job_posting(url):
     rec_idx = parse_qs(urlparse(url).query)["rec_idx"][0]
 
@@ -14,7 +51,6 @@ def scrape_job_posting(url):
     })
 
     result = {
-        "url": url,
         "title": None,
         "input_type": "url",
         "source_url": url,
@@ -47,16 +83,19 @@ def scrape_job_posting(url):
         soup = BeautifulSoup(res.text, "html.parser")
         title = soup.select("h1.tit_job")[0].text.strip()
         result["title"] = title
-        cont = soup.select_one("div.cont")
+        # cont = soup.select_one("div.cont")
 
-        if cont:
-            lines = [l.strip() for l in cont.text.split("\n") if l.strip()]
-            detail = {}
-            for i in range(1, len(lines), 2):
-                detail[lines[i - 1]] = lines[i]
-                if lines[i - 1] == "근무형태":
-                    break
-            result["conts_summary"] = detail
+        # if cont:
+        #     lines = [l.strip() for l in cont.text.split("\n") if l.strip()]
+        #     detail = {}
+        #     for i in range(1, len(lines), 2):
+        #         detail[lines[i - 1]] = lines[i]
+        #         if lines[i - 1] == "근무형태":
+        #             break
+        #     result["conts_summary"] = lines
+
+        details = parse_summary(soup)
+        result["conts_summary"] = details
 
     except Exception as e:
         print(f"[view-ajax 실패] {rec_idx}: {e}")
