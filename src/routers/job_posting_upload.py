@@ -7,16 +7,17 @@ from routers.job_posting_service import scrape_job_posting
 from database import supabase
 
 router = APIRouter(
-    prefix="/job-posting",
+    prefix="/api/v1",
     tags=["job-posting"]
 )
 
 class UrlRequest(BaseModel):
     url: str
 
-@router.post("/upload")
+@router.post("/job-posting/upload")
 def upload_job_posting(req: UrlRequest):
     result = scrape_job_posting(req.url)
+    print(result)
 
     supabase.table("job_postings").upsert({
     "user_id": None,
