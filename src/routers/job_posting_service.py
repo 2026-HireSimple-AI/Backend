@@ -27,8 +27,6 @@ def parse_summary(soup):
             continue
 
         key = clean(dt.get_text())
-        if key == "근무조건":
-            break
 
         tooltip_wrap = dd.select_one(".toolTipWrap")
         details = []
@@ -50,6 +48,9 @@ def parse_summary(soup):
         main_text = clean(dd.get_text(" "))
         result[key] = details if details else main_text
 
+        if key == "근무지역":
+            break
+        
     return result
 
 def scrape_job_posting(url):
