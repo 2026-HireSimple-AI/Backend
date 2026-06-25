@@ -2,7 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 
-from __future__ import annotations
+# from __future__ import annotations
 
 import base64
 from io import BytesIO
