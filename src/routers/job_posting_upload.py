@@ -32,7 +32,7 @@ def json_to_str(data: dict) -> str:
 @router.post("/job-posting/upload")
 def upload_job_posting(req: UrlRequest):
     result = scrape_job_posting(req.url)
-    print(result)
+    # print(result)
 
     response = (
         supabase.table("job_postings").upsert({
