@@ -27,6 +27,12 @@ class GenerateRequest(BaseModel):
 class UpdateQuestionRequest(BaseModel):
     question_text: str
 
+class AddQuestionRequest(BaseModel):
+    question_type: str = "기타"
+    question_text: str
+    compliance_status: str = "준수"
+    created_by: str = "USER"
+
 
 # ---------- GET ----------
 
@@ -176,7 +182,7 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
 === 지원자 이력서 ===
 {resume_text[:2000]}
 
-정확히 {body.question_count}개의 질문을 JSON 배열로 출력하세요."""
+반드시 정확히 {body.question_count}개의 질문을 JSON 배열로 출력하세요. {body.question_count}개 미만이면 안 됩니다."""
 
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
@@ -285,3 +291,41 @@ async def update_interview_question(question_id: int, body: UpdateQuestionReques
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"수정 실패: {str(e)}")
+
+
+# ---------- DELETE ----------
+
+@router.delete("/interview-questions/{question_id}")
+async def delete_interview_question(question_id: int):
+    try:
+        result = supabase.table("interview_questions").delete().eq("id", question_id).execute()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"삭제 실패: {str(e)}")
+
+
+# ---------- POST: 단일 질문 직접 추가 ----------
+
+@router.post("/applicants/{applicant_id}/interview-questions/add")
+async def add_interview_question(applicant_id: int, body: AddQuestionRequest):
+    valid_types = {"행동", "역량", "우려검증", "기술검증", "기타"}
+    valid_statuses = {"준수", "경고", "심각"}
+
+    row = {
+        "applicant_id": applicant_id,
+        "question_type": body.question_type if body.question_type in valid_types else "기타",
+        "question_text": body.question_text,
+        "created_by": body.created_by,
+        "compliance_status": body.compliance_status if body.compliance_status in valid_statuses else "준수",
+        "revised_question_text": None
+    }
+
+    try:
+        res = supabase.table("interview_questions").insert(row).execute()
+        if not res.data:
+            raise HTTPException(status_code=500, detail="질문 저장 실패")
+        return {"success": True, "data": res.data[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"질문 추가 실패: {str(e)}")

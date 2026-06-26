@@ -24,7 +24,7 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     return text
 
 
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[str]:
+def chunk_text(text: str, chunk_size: int = 800, overlap: int = 200) -> List[str]:
     """텍스트를 청크 단위로 분할"""
     chunks = []
     start = 0
