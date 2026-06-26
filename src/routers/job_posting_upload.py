@@ -114,13 +114,17 @@ def upload_job_posting(req: UrlRequest):
         }.get(category, None)
         
         if formatted_posting.get(category, 0):
-            supabase.table("formatted_postings").upsert({
+            response = (
+                supabase.table("formatted_postings").upsert({
             "job_posting_id": job_posting_id,
             "category": category,
             "content": formatted_posting[category],
             "sort_order": sorted_id
             }).execute()
-        
+            )
+        formatted_posting_id = response.data[0]["id"]
+
+
     for skill in formatted_posting["skill_stack"]:
         supabase.table("skills_stack").upsert({
             "job_posting_id": job_posting_id,
@@ -128,4 +132,4 @@ def upload_job_posting(req: UrlRequest):
             "sort_order": None
         }).execute()
 
-    return result
+    return formatted_posting_id
