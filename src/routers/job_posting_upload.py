@@ -138,15 +138,15 @@ def upload_job_posting(req: UrlRequest):
             "formatted_posting": [
                 {
                     "category": "자격 요건",
-                    "content": "\n".join(formatted_posting["requirement"])
+                    "content": formatted_posting["requirement"]
                 },
                 {
                     "category": "주요 업무",
-                    "content": "\n".join(formatted_posting["task"])
+                    "content": formatted_posting["task"]
                 },
                 {
                     "category": "우대 사항",
-                    "content": "\n".join(formatted_posting["preference"])
+                    "content": formatted_posting["preference"]
                 }
             ],
             "skills_stack": formatted_posting["skill_stack"]
