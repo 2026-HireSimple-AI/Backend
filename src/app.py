@@ -11,7 +11,8 @@ app.add_middleware(
         "http://127.0.0.1:3000"
         ], # 프론트 주소
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    # allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allow_methods=["*"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
