@@ -162,7 +162,38 @@ def update_job_posting_title(job_posting_id: int, req: TitleRequest):
     }).eq(
         "id", job_posting_id
         ).execute()
+    
     return {
         "success": True,
         "title": new_title
+    }
+
+@router.get("/job-posting/{job_posting_id}")
+def show_formatted_job_posting(job_posting_id: int):
+    response = (
+        supabase.table("formatted_postings")
+        .select("*")
+        .eq("job_posting_id", job_posting_id)
+        .execute()
+    )
+
+    title_response  = (
+        supabase.table("job_postings")
+        .select("title")
+        .eq("id", job_posting_id)
+        .execute()
+    )
+
+    if not title_response.data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"id={job_posting_id}인 채용공고가 없습니다."
+        )
+
+    return {
+        "success": True,
+        "data": {
+            "title": title_response.data[0]["title"],
+            "formatted_posting": response.data
+        }
     }
