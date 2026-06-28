@@ -138,3 +138,5 @@ torch
 docx2txt
 transformers==4.57.1
 python-multipart
+# -----------------------
+beautifulsoup4

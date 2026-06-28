@@ -27,6 +27,12 @@ class GenerateRequest(BaseModel):
 class UpdateQuestionRequest(BaseModel):
     question_text: str
 
+class AddQuestionRequest(BaseModel):
+    question_type: str = "기타"
+    question_text: str
+    compliance_status: str = "준수"
+    created_by: str = "USER"
+
 
 # ---------- GET ----------
 
@@ -157,12 +163,12 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
   (출신지역, 가족관계, 혼인여부, 나이, 성별, 신체조건, 학벌 직접 질문 등)
 
 === 출력 형식 ===
-반드시 아래 JSON 배열만 출력하세요. 다른 텍스트 없이:
+반드시 JSON 배열만 출력하세요. 마크다운, 설명, 코드블록 없이 순수 JSON 배열만:
 [
   {{
-    "question_type": "{question_types_str} 중 하나",
+    "question_type": "행동 또는 역량 또는 우려검증 또는 기술검증 또는 기타",
     "question_text": "질문 내용",
-    "compliance_status": "준수|경고|심각",
+    "compliance_status": "준수 또는 경고 또는 심각",
     "compliance_reason": "법령 준수 판단 근거 한 줄"
   }}
 ]"""
@@ -176,7 +182,7 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
 === 지원자 이력서 ===
 {resume_text[:2000]}
 
-정확히 {body.question_count}개의 질문을 JSON 배열로 출력하세요."""
+반드시 정확히 {body.question_count}개의 질문을 JSON 배열로 출력하세요. {body.question_count}개 미만이면 안 됩니다."""
 
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
@@ -192,8 +198,7 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    "temperature": 0.7,
-                    "response_format": {"type": "json_object"}
+                    "temperature": 0.7
                 }
             )
 
@@ -201,15 +206,23 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
             raise HTTPException(status_code=502, detail=f"OpenAI 오류: {resp.status_code}")
 
         content = resp.json()["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
+        import sys
+        sys.stderr.write(f"\n[GPT RAW]\n{content}\n[/GPT RAW]\n")
+        sys.stderr.flush()
 
-        # dict → list 변환
-        if isinstance(parsed, dict):
-            questions_list = next((v for v in parsed.values() if isinstance(v, list)), [])
-        elif isinstance(parsed, list):
-            questions_list = parsed
+        # JSON 배열 추출 (GPT가 마크다운 코드블록으로 감쌀 수 있음)
+        import re
+        json_match = re.search(r'\[.*\]', content, re.DOTALL)
+        if json_match:
+            questions_list = json.loads(json_match.group())
         else:
-            questions_list = []
+            parsed = json.loads(content)
+            if isinstance(parsed, dict):
+                questions_list = next((v for v in parsed.values() if isinstance(v, list)), [])
+            elif isinstance(parsed, list):
+                questions_list = parsed
+            else:
+                questions_list = []
 
     except HTTPException:
         raise
@@ -239,13 +252,15 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
             "compliance_status": compliance if compliance in valid_statuses else "준수",
             "revised_question_text": None
         }
+        print(f"[DEBUG] INSERT 시도: {row}")
         try:
             ins = supabase.table("interview_questions").insert(row).execute()
+            print(f"[DEBUG] INSERT 결과: {ins.data}")
             if ins.data:
                 ins.data[0]["compliance_reason"] = q.get("compliance_reason", "")
                 inserted.append(ins.data[0])
         except Exception as e:
-            print(f"[WARN] 질문 삽입 실패: {e}")
+            print(f"[ERROR] 질문 삽입 실패 (applicant_id={applicant_id}): {type(e).__name__}: {e}")
 
     return {
         "success": True,
@@ -276,3 +291,41 @@ async def update_interview_question(question_id: int, body: UpdateQuestionReques
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"수정 실패: {str(e)}")
+
+
+# ---------- DELETE ----------
+
+@router.delete("/interview-questions/{question_id}")
+async def delete_interview_question(question_id: int):
+    try:
+        result = supabase.table("interview_questions").delete().eq("id", question_id).execute()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"삭제 실패: {str(e)}")
+
+
+# ---------- POST: 단일 질문 직접 추가 ----------
+
+@router.post("/applicants/{applicant_id}/interview-questions/add")
+async def add_interview_question(applicant_id: int, body: AddQuestionRequest):
+    valid_types = {"행동", "역량", "우려검증", "기술검증", "기타"}
+    valid_statuses = {"준수", "경고", "심각"}
+
+    row = {
+        "applicant_id": applicant_id,
+        "question_type": body.question_type if body.question_type in valid_types else "기타",
+        "question_text": body.question_text,
+        "created_by": body.created_by,
+        "compliance_status": body.compliance_status if body.compliance_status in valid_statuses else "준수",
+        "revised_question_text": None
+    }
+
+    try:
+        res = supabase.table("interview_questions").insert(row).execute()
+        if not res.data:
+            raise HTTPException(status_code=500, detail="질문 저장 실패")
+        return {"success": True, "data": res.data[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"질문 추가 실패: {str(e)}")
