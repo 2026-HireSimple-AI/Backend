@@ -15,6 +15,9 @@ router = APIRouter(
 class UrlRequest(BaseModel):
     url: str
 
+class TitleRequest(BaseModel):
+    title: str
+
 def json_to_str(data: dict) -> str:
     lines = []
     for key, value in data.items():
@@ -61,13 +64,6 @@ def upload_job_posting(req: UrlRequest, authorization: Optional[str] = Header(No
 
     title = result['title']
     summary = json_to_str(result["conts_summary"])
-
-    # if result["raw_content"] == str:
-    #     raw_posting = result["raw_content"]
-    #     formatted_posting = job_posting_formating(title, summary, raw_posting)
-    # else:
-    #     raw_image_posting = extract_job_posting_text(result["raw_content"])
-    #     formatted_posting = job_posting_formating(title, summary, raw_image_posting)
 
     # 자격조건, 기술스택, 주요업무, 우대사항이 무조건 나오게 하기
     REQUIRED_FIELDS = ["requirement", "skill_stack", "task", "preference"]
@@ -127,15 +123,13 @@ def upload_job_posting(req: UrlRequest, authorization: Optional[str] = Header(No
         
         if formatted_posting.get(category, 0):
             response = (
-                supabase.table("formatted_postings").upsert({
+            supabase.table("formatted_postings").upsert({
             "job_posting_id": job_posting_id,
             "category": category,
             "content": formatted_posting[category],
             "sort_order": sorted_id
             }).execute()
             )
-        formatted_posting_id = response.data[0]["id"]
-
 
     for skill in formatted_posting["skill_stack"]:
         supabase.table("skills_stack").upsert({
@@ -143,14 +137,75 @@ def upload_job_posting(req: UrlRequest, authorization: Optional[str] = Header(No
             "skill_name": skill,
             "sort_order": None
         }).execute()
+    
+    print(formatted_posting)
 
-    # return formatted_posting_id
     return {
-    "success": True,
-    "data": {
-        "job_posting_id": job_posting_id,
-        "title": result["title"],
-        "input_type": result["input_type"],
-        "source_url": result["source_url"]
+        "success": True,
+        "data": {
+            "job_posting_id": job_posting_id,
+            "title": title,
+            "input_type": result["input_type"],
+            "source_url": result["source_url"],
+            "formatted_posting": [
+                {
+                    "category": "자격 요건",
+                    "content": formatted_posting["requirement"]
+                },
+                {
+                    "category": "주요 업무",
+                    "content": formatted_posting["task"]
+                },
+                {
+                    "category": "우대 사항",
+                    "content": formatted_posting["preference"]
+                }
+            ],
+            "skills_stack": formatted_posting["skill_stack"]
+        }
     }
-}
+
+@router.patch("/job-posting/{job_posting_id}/title")
+def update_job_posting_title(job_posting_id: int, req: TitleRequest):
+    new_title = req.title
+
+    supabase.table("job_postings").update({
+        "title": new_title
+    }).eq(
+        "id", job_posting_id
+        ).execute()
+    
+    return {
+        "success": True,
+        "title": new_title
+    }
+
+@router.get("/job-posting/{job_posting_id}")
+def show_formatted_job_posting(job_posting_id: int):
+    response = (
+        supabase.table("formatted_postings")
+        .select("*")
+        .eq("job_posting_id", job_posting_id)
+        .execute()
+    )
+
+    title_response  = (
+        supabase.table("job_postings")
+        .select("title")
+        .eq("id", job_posting_id)
+        .execute()
+    )
+
+    if not title_response.data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"id={job_posting_id}인 채용공고가 없습니다."
+        )
+
+    return {
+        "success": True,
+        "data": {
+            "title": title_response.data[0]["title"],
+            "formatted_posting": response.data
+        }
+    }
