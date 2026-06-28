@@ -135,5 +135,6 @@ playwright==1.60.0
 langchain-community
 pypdf
 torch
-transformers
 docx2txt
+transformers==4.57.1
+python-multipart
