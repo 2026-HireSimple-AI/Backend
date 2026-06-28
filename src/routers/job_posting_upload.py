@@ -1,10 +1,11 @@
 # 채용 공고 url을 입력 받음
 # 스크랩핑 -> 형식 분류(이미지 or 텍스트)
 # 여기서 포메팅까지 해서 DB 저장까지 하자
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from routers.job_posting_service import scrape_job_posting, extract_job_posting_text, job_posting_formating
-from database import supabase
+from database import supabase, supabase_auth
+from typing import Optional
 
 router = APIRouter(
     prefix="/api/v1",
@@ -33,20 +34,31 @@ def json_to_str(data: dict) -> str:
     return "\n".join(lines)
 
 @router.post("/job-posting/upload")
-def upload_job_posting(req: UrlRequest):
+def upload_job_posting(req: UrlRequest, authorization: Optional[str] = Header(None)):
     result = scrape_job_posting(req.url)
     # print(result)
 
+    # user_id 추출 (로그인 안 했으면 None)
+    user_id = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.replace("Bearer ", "")
+        try:
+            res = supabase_auth.auth.get_user(token)
+            if res.user:
+                user_id = str(res.user.id)
+        except:
+            pass
+
     response = (
         supabase.table("job_postings").upsert({
-    "user_id": None,
-    "title": result['title'],
-    "input_type": result["input_type"],
-    "source_url": result["source_url"],
-    "raw_content": result["raw_content"],
-    "conts_summary": result["conts_summary"]
-    }).execute()
-    )
+                "user_id": user_id,
+                "title": result['title'],
+                "input_type": result["input_type"],
+                "source_url": result["source_url"],
+                "raw_content": result["raw_content"],
+                "conts_summary": result["conts_summary"]
+                }).execute()
+                )
 
     job_posting_id = response.data[0]["id"]
 
