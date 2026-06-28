@@ -50,6 +50,24 @@ class PIIMatch:
     start: int
     end: int
 
+def get_pii_value(matches: list[PIIMatch], pii_type: str):
+    values = [
+        m.value.strip()
+        for m in matches
+        if m.type == pii_type and m.value.strip()
+    ]
+
+    if not values:
+        return None
+
+    # 너무 긴 값 방지
+    if pii_type == "name":
+        values = [
+            v for v in values
+            if re.fullmatch(r"[가-힣]{2,4}", v)
+        ]
+
+    return values[0] if values else None
 
 # --------------------------------------------------
 # 1차: 정규식 + 이력서 라벨 룰
@@ -491,9 +509,16 @@ def process_resume_batch(
             if m.type in SAVABLE_TYPES
         ]
 
+        real_name = get_pii_value(matches, "name")
+        phone = get_pii_value(matches, "phone")
+        email = get_pii_value(matches, "email")
+
         results.append(
             {
                 "filename": filename,
+                "real_name": real_name,
+                "phone": phone,
+                "email": email,
                 "masked_text": masked_text,
                 "pii": pii,
                 "masking_status": status,
@@ -501,5 +526,4 @@ def process_resume_batch(
                 "residual": residual,
             }
         )
-
     return results
