@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers import analysis, interview, job_posting_upload, resume_analysis
+from routers.auth import router as auth_router
 
 app = FastAPI()
 
@@ -19,3 +20,4 @@ app.include_router(analysis.router)
 app.include_router(interview.router)
 app.include_router(job_posting_upload.router)
 app.include_router(resume_analysis.router)
+app.include_router(auth_router)
