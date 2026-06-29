@@ -252,23 +252,76 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
             "compliance_status": compliance if compliance in valid_statuses else "준수",
             "revised_question_text": None
         }
-        print(f"[DEBUG] INSERT 시도: {row}")
-        try:
-            ins = supabase.table("interview_questions").insert(row).execute()
-            print(f"[DEBUG] INSERT 결과: {ins.data}")
-            if ins.data:
-                ins.data[0]["compliance_reason"] = q.get("compliance_reason", "")
-                inserted.append(ins.data[0])
-        except Exception as e:
-            print(f"[ERROR] 질문 삽입 실패 (applicant_id={applicant_id}): {type(e).__name__}: {e}")
+        # 재시도 로직 추가 (최대 2번)
+        for attempt in range(2):
+            try:
+                ins = supabase.table("interview_questions").insert(row).execute()
+                if ins.data:
+                    ins.data[0]["compliance_reason"] = q.get("compliance_reason", "")
+                    inserted.append(ins.data[0])
+                    break  # 성공하면 재시도 중단
+            except Exception as e:
+                print(f"[ERROR] 시도 {attempt+1} 실패: {type(e).__name__}: {e}")
+                if attempt == 1:
+                    print(f"[ERROR] 최종 실패, 스킵: {row['question_text'][:30]}")
+         # 8) 부족한 경우 보완 생성
+    shortage = body.question_count - len(inserted)
+    if shortage > 0:
+        print(f"[INFO] {shortage}개 부족 → 보완 생성 시도")
+        supplement_prompt = f"""면접 질문이 {shortage}개 부족합니다.
+추가로 정확히 {shortage}개만 JSON 배열로 생성하세요.
+질문 유형: [{question_types_str}]
+직무: {job_info[:500]}
 
+반드시 {shortage}개만 순수 JSON 배열로 출력하세요."""
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp2 = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {openai_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": supplement_prompt}
+                        ],
+                        "temperature": 0.7
+                    }
+                )
+            content2 = resp2.json()["choices"][0]["message"]["content"]
+            json_match2 = re.search(r'\[.*\]', content2, re.DOTALL)
+            if json_match2:
+                extra_list = json.loads(json_match2.group())
+                for q in extra_list[:shortage]:
+                    raw_type = (q.get("question_type") or "기타").replace(" ", "")
+                    compliance = q.get("compliance_status", "준수")
+                    row = {
+                        "applicant_id": applicant_id,
+                        "question_type": raw_type if raw_type in valid_types else "기타",
+                        "question_text": q.get("question_text", ""),
+                        "created_by": "AI",
+                        "compliance_status": compliance if compliance in valid_statuses else "준수",
+                        "revised_question_text": None
+                    }
+                    try:
+                        ins = supabase.table("interview_questions").insert(row).execute()
+                        if ins.data:
+                            inserted.append(ins.data[0])
+                    except Exception as e:
+                        print(f"[ERROR] 보완 INSERT 실패: {e}")
+        except Exception as e:
+            print(f"[INFO] 보완 생성 실패: {e}")
+            
     return {
         "success": True,
         "message": f"면접 질문 {len(inserted)}개 생성 완료 (RAG 검수 적용)",
         "applicant_id": applicant_id,
         "data": inserted
     }
-
 
 # ---------- PATCH ----------
 
