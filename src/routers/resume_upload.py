@@ -182,3 +182,11 @@ async def upload_resumes(
             "original_filename": resume_file["original_filename"],
             "processing_status": resume_file["processing_status"],
         })
+    
+    return {
+    "success": True,
+    "data": {
+        "uploaded_count": len(files_response),
+        "files": files_response  # ← .files로 감싸기
+        }
+    }
