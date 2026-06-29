@@ -53,13 +53,19 @@ async def analyze_resume(applicant_id: int):
         .execute()
 
     # 4. 평가 기준 조회
-    type_criteria = supabase.table("type_criteria")\
+    # type_criteria = supabase.table("type_criteria")\
+    #     .select("*")\
+    #     .eq("job_posting_id", job_posting_id)\
+    #     .execute()
+
+    # detail_criteria = supabase.table("detail_criteria")\
+    #     .select("*")\
+    #     .execute()
+
+    # 4. 평가 기준 조회
+    criteria = supabase.table("criteria")\
         .select("*")\
         .eq("job_posting_id", job_posting_id)\
-        .execute()
-
-    detail_criteria = supabase.table("detail_criteria")\
-        .select("*")\
         .execute()
     
     # 5. 기술 스택 비교 (텍스트 매칭)
@@ -68,12 +74,17 @@ async def analyze_resume(applicant_id: int):
     skill_score = round((len(matched_skills) / len(skill_names)) * 100, 2) if skill_names else 0
 
     # 6. 평가 기준 텍스트로 변환
+    # criteria_text = ""
+    # for tc in type_criteria.data:
+    #     criteria_text += f"\n[{tc['criterion_type']}] 가중치: {tc['type_weight']}%\n"
+    #     for dc in detail_criteria.data:
+    #         if dc["type_criteria_id"] == tc["id"]:
+    #             criteria_text += f"  - ID:{dc['id']} {dc['detail']} (가중치: {dc['weight']}%)\n"
+
+    # 6. 평가 기준 텍스트로 변환
     criteria_text = ""
-    for tc in type_criteria.data:
-        criteria_text += f"\n[{tc['criterion_type']}] 가중치: {tc['type_weight']}%\n"
-        for dc in detail_criteria.data:
-            if dc["type_criteria_id"] == tc["id"]:
-                criteria_text += f"  - ID:{dc['id']} {dc['detail']} (가중치: {dc['weight']}%)\n"
+    for c in criteria.data:
+        criteria_text += f"  - ID:{c['id']} [{c['criterion_type']}] {c['details']} (가중치: {c['type_weight']}%)\n"
 
     # 7. LLM 프롬프트 작성
     prompt = PromptTemplate(
@@ -111,7 +122,20 @@ async def analyze_resume(applicant_id: int):
         scores = json.loads(result.content)
     except:
         raise HTTPException(status_code=500, detail="LLM 응답 파싱 실패")
-    
+
+    valid_detail_scores = []
+    for ds in scores.get("detail_scores", []):
+        try:
+            detail_id = int(ds["detail_criteria_id"])  # 숫자로 변환
+            valid_detail_scores.append({
+                "detail_criteria_id": detail_id,
+                "score": ds["score"]
+            })
+        except (ValueError, TypeError):
+            continue  # 변환 안 되면 스킵
+
+    scores["detail_scores"] = valid_detail_scores
+
     # 10. 종합 점수 계산
     total_score = round(
         (scores.get("requirement_score", 0) * 0.3) +
@@ -133,14 +157,22 @@ async def analyze_resume(applicant_id: int):
     }).execute()
 
     # 12. detail_scores 저장
+    # for ds in scores.get("detail_scores", []):
+    #     supabase.table("detail_scores").upsert({
+    #         "applicant_id": applicant_id,
+    #         "type_criteria_id": next(
+    #             (dc["type_criteria_id"] for dc in detail_criteria.data
+    #                 if dc["id"] == ds["detail_criteria_id"]), None
+    #         ),
+    #         "detail_criteria_id": ds["detail_criteria_id"],
+    #         "score": ds["score"]
+    #     }).execute()
+
+    # 12. detail_scores 저장
     for ds in scores.get("detail_scores", []):
         supabase.table("detail_scores").upsert({
             "applicant_id": applicant_id,
-            "type_criteria_id": next(
-                (dc["type_criteria_id"] for dc in detail_criteria.data
-                    if dc["id"] == ds["detail_criteria_id"]), None
-            ),
-            "detail_criteria_id": ds["detail_criteria_id"],
+            "criteria_id": ds["detail_criteria_id"],
             "score": ds["score"]
         }).execute()
 
