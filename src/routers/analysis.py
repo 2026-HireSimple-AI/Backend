@@ -70,40 +70,68 @@ async def get_applicant_detail(applicant_id: int):
         .eq("applicant_id", applicant_id)\
         .execute()
 
-    # type_criteria 조회
-    type_criteria_list = supabase.table("type_criteria")\
+    # 수정 후
+    criteria_list = supabase.table("criteria")\
         .select("*")\
         .execute()
 
-    # detail_criteria 조회
-    detail_criteria_list = supabase.table("detail_criteria")\
-        .select("*")\
-        .execute()
+    criteria_map = {c["id"]: c for c in criteria_list.data}
 
-    # 딕셔너리로 변환 (빠른 조회용)
-    type_criteria_map = {tc["id"]: tc for tc in type_criteria_list.data}
-    detail_criteria_map = {dc["id"]: dc for dc in detail_criteria_list.data}
+    print("criteria_map:", criteria_map)
+    print("detail_scores:", detail_scores.data)
 
-    # 프론트 구조에 맞게 변환
+    # # type_criteria 조회
+    # type_criteria_list = supabase.table("type_criteria")\
+    #     .select("*")\
+    #     .execute()
+
+    # # detail_criteria 조회
+    # detail_criteria_list = supabase.table("detail_criteria")\
+    #     .select("*")\
+    #     .execute()
+
+    # # 딕셔너리로 변환 (빠른 조회용)
+    # type_criteria_map = {tc["id"]: tc for tc in type_criteria_list.data}
+    # detail_criteria_map = {dc["id"]: dc for dc in detail_criteria_list.data}
+
+    # 세부 점수 변환
     converted_detail_scores = []
     for ds in detail_scores.data:
-        type_criteria = type_criteria_map.get(ds.get("type_criteria_id"), {})
-        detail_criteria = detail_criteria_map.get(ds.get("detail_criteria_id"), {})
+        criteria = criteria_map.get(ds.get("criteria_id"), {})
         score = ds.get("score", 0)
-        weight = detail_criteria.get("weight", 0)
+        type_weight = criteria.get("type_weight", 0)
 
-        # detail이 없거나 weight가 0이면 제외
-        if not detail_criteria.get("detail") or weight == 0:
+        if not criteria.get("details") or type_weight == 0:
             continue
 
         converted_detail_scores.append({
-            "criterion_type": type_criteria.get("criterion_type", ""),
-            "type_weight": type_criteria.get("type_weight", 0),
-            "detail": detail_criteria.get("detail", ""),
+            "criterion_type": criteria.get("criterion_type", ""),
+            "type_weight": type_weight,
+            "detail": criteria.get("details", ""),
             "score": score,
-            "weight": weight,
-            "weighted_score": round(score * weight / 100, 1)
-        })
+            "weight": type_weight,
+            "weighted_score": round(score * type_weight / 100, 1)
+    })
+    # 프론트 구조에 맞게 변환
+    # converted_detail_scores = []
+    # for ds in detail_scores.data:
+    #     type_criteria = type_criteria_map.get(ds.get("type_criteria_id"), {})
+    #     detail_criteria = detail_criteria_map.get(ds.get("detail_criteria_id"), {})
+    #     score = ds.get("score", 0)
+    #     weight = detail_criteria.get("weight", 0)
+
+    #     # detail이 없거나 weight가 0이면 제외
+    #     if not detail_criteria.get("detail") or weight == 0:
+    #         continue
+
+    #     converted_detail_scores.append({
+    #         "criterion_type": type_criteria.get("criterion_type", ""),
+    #         "type_weight": type_criteria.get("type_weight", 0),
+    #         "detail": detail_criteria.get("detail", ""),
+    #         "score": score,
+    #         "weight": weight,
+    #         "weighted_score": round(score * weight / 100, 1)
+    #     })
     
     # 기술 스택 조회
     skills = supabase.table("skills_stack")\
