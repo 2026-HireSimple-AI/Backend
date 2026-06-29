@@ -12,7 +12,7 @@ router = APIRouter(
     tags=["criteria"]
 )
 
-@router.post("job-posting/{job_posting_id}/criteria")
+@router.post("/job-posting/{job_posting_id}/criteria")
 def create_criteria(job_posting_id: int):
     response = (
         supabase.table("formatted_postings")
@@ -21,38 +21,29 @@ def create_criteria(job_posting_id: int):
         .execute()
     )
 
-    title_response  = (
+    title_response = (
         supabase.table("job_postings")
         .select("title")
         .eq("id", job_posting_id)
         .execute()
     )
 
-    model= "gpt-4o-mini",
-    temperature = 0,
+    if not title_response.data:
+        raise HTTPException(status_code=404, detail="채용공고를 찾을 수 없습니다.")
+
+    model = "gpt-4o-mini"
+    temperature = 0
 
     prompt = ChatPromptTemplate.from_template(
-"""
+        """
 이 채용 공고문으로 사람을 채용하고 싶어.
 이 채용 공고문을 바탕으로 지원자 적합성 평가 기준을 만들거야.
-공고문에서 자격조건, 주요업무, 우대사항을 주로 필수 역량을 뽑아서 각 항목별 가중치를 설정해서 평가 기준을 만들거야.
-
-각 카테고리별로 반드시 1개만 만들지 말고,
-공고문 내용에 따라 여러 개의 세부 평가 기준을 만들어줘.
-
-예를 들어 자격조건에 Python, FastAPI, DB 경험이 있다면
-각각을 별도의 평가 기준으로 분리해줘.
-
-단, 전체 weight의 합은 반드시 100이 되어야 해.
-
-평가기준을 테이블로 만들어줘.
 
 채용 공고 제목:
 {title}
 
 채용 공고문:
 {job_posting}
-
 
 OUTPUT(JSON):
 반드시 JSON 배열로만 출력해줘.
@@ -62,11 +53,6 @@ OUTPUT(JSON):
     "category": "자격조건",
     "description": "세부 평가 기준",
     "weight": 10
-  }},
-  {{
-    "category": "주요업무",
-    "description": "세부 평가 기준",
-    "weight": 15
   }}
 ]
 
@@ -76,16 +62,127 @@ OUTPUT(JSON):
 - description은 구체적인 평가 기준으로 작성
 - weight 전체 합은 반드시 100
 - JSON 외의 설명 문장은 출력하지 마
+- 자격조건에는 학력과 경력은 평가 기준으로 만들지마.
 """
     )
+
     llm = ChatOpenAI(model=model, temperature=temperature)
     chain = prompt | llm | JsonOutputParser()
-    result = chain.invoke({"title": title_response.data[0]["title"], "job_posting": response.data})
 
-    # supabase.table("job_postings").upsert({
-    #         "title": result['title'],
-    #         "input_type": result["input_type"],
-    #         "source_url": result["source_url"],
-    #         "raw_content": result["raw_content"],
-    #         "conts_summary": result["conts_summary"]
-    #         }).execute()
+    results = chain.invoke({
+        "title": title_response.data[0]["title"],
+        "job_posting": response.data
+    })
+
+    category_map = {
+        "자격조건": "자격 조건",
+        "자격 조건": "자격 조건",
+        "주요업무": "주요 업무",
+        "주요 업무": "주요 업무",
+        "우대사항": "우대 사항",
+        "우대 사항": "우대 사항",
+    }
+
+    sort_order_map = {
+        "자격 조건": 1,
+        "주요 업무": 2,
+        "우대 사항": 3,
+    }
+
+    inserted_criteria = []
+
+    for item in results:
+        raw_category = item["category"]
+        category = category_map.get(raw_category)
+
+        if category is None:
+            continue
+
+        insert_response = (
+            supabase.table("criteria")
+            .insert({
+                "job_posting_id": job_posting_id,
+                "criterion_type": category,
+                "details": item["description"],
+                "type_weight": item["weight"],
+                "sort_order": sort_order_map.get(category)
+            })
+            .execute()
+        )
+
+        inserted_criteria.extend(insert_response.data)
+
+    grouped = {}
+
+    for row in inserted_criteria:
+        criterion_type = row["criterion_type"]
+
+        if criterion_type not in grouped:
+            grouped[criterion_type] = {
+                "id": row["id"],
+                "criterion_type": criterion_type,
+                "description": f"{criterion_type} 관련 평가 기준입니다.",
+                "type_weight": 0,
+                "detail_criteria": []
+            }
+
+        grouped[criterion_type]["type_weight"] += row["type_weight"]
+
+        grouped[criterion_type]["detail_criteria"].append({
+            "id": row["id"],
+            "detail": row["details"],
+            "weight": row["type_weight"]
+        })
+
+    type_criteria = sorted(
+        grouped.values(),
+        key=lambda x: sort_order_map.get(x["criterion_type"], 999)
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "type_criteria": type_criteria
+        }
+    }
+
+@router.get("/job-posting/{job_posting_id}/criteria")
+def get_criteria(job_posting_id: int):
+    response = (
+        supabase.table("criteria")
+        .select("*")
+        .eq("job_posting_id", job_posting_id)
+        .order("sort_order")
+        .execute()
+    )
+
+    rows = response.data
+
+    grouped = {}
+
+    for row in rows:
+        criterion_type = row["criterion_type"]
+
+        if criterion_type not in grouped:
+            grouped[criterion_type] = {
+                "id": row["id"],
+                "criterion_type": criterion_type,
+                "description": f"{criterion_type} 관련 평가 기준입니다.",
+                "type_weight": 0,
+                "detail_criteria": []
+            }
+
+        grouped[criterion_type]["type_weight"] += row["type_weight"]
+
+        grouped[criterion_type]["detail_criteria"].append({
+            "id": row["id"],
+            "detail": row["details"],
+            "weight": row["type_weight"]
+        })
+
+    return {
+        "success": True,
+        "data": {
+            "type_criteria": list(grouped.values())
+        }
+    }
