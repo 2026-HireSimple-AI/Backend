@@ -182,12 +182,11 @@ async def upload_resumes(
             "original_filename": resume_file["original_filename"],
             "processing_status": resume_file["processing_status"],
         })
-
-    # 파일 형식 떄문에 추가 - 유선님에게 공유
+    
     return {
     "success": True,
     "data": {
         "uploaded_count": len(files_response),
         "files": files_response  # ← .files로 감싸기
+        }
     }
-}
