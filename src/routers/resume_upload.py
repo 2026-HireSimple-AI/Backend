@@ -134,6 +134,87 @@ def save_resume(
     return response.data[0]
 
 
+@router.get("/job-postings/{job_posting_id}/resumes")
+async def list_resumes(job_posting_id: int):
+    """특정 공고에 달린 이력서(지원자) 목록을 조회한다."""
+    response = (
+        supabase
+        .table("applicants")
+        .select(
+            "id, masked_code, real_name, phone, email,"
+            "resume_files(id, original_filename, file_type, file_size_bytes, processing_status)"
+        )
+        .eq("job_posting_id", job_posting_id)
+        .execute()
+    )
+
+    files_response = []
+
+    for applicant in response.data:
+        resume_files = applicant.get("resume_files") or []
+
+        for resume_file in resume_files:
+            files_response.append({
+                "resume_file_id": resume_file["id"],
+                "applicant_id": applicant["id"],
+                "original_filename": resume_file["original_filename"],
+                "file_type": resume_file["file_type"],
+                "file_size_bytes": resume_file["file_size_bytes"],
+                "processing_status": resume_file["processing_status"],
+            })
+
+    return {
+        "success": True,
+        "data": {
+            "uploaded_count": len(files_response),
+            "files": files_response,
+        }
+    }
+
+
+@router.delete("/resumes/{resume_file_id}")
+async def delete_resume(resume_file_id: int):
+    """이력서 파일 1건과 연관된 지원자, 원본 Storage 파일을 함께 삭제한다."""
+    resume_file_res = (
+        supabase
+        .table("resume_files")
+        .select("id, applicant_id, file_path")
+        .eq("id", resume_file_id)
+        .execute()
+    )
+
+    if not resume_file_res.data:
+        raise HTTPException(status_code=404, detail="이력서 파일을 찾을 수 없습니다.")
+
+    resume_file = resume_file_res.data[0]
+    applicant_id = resume_file["applicant_id"]
+    file_path = resume_file.get("file_path")
+
+    # 1. Storage 원본 파일 삭제 (실패해도 DB 정리는 계속 진행)
+    if file_path:
+        try:
+            supabase.storage.from_(RESUME_STORAGE_BUCKET).remove([file_path])
+        except Exception:
+            pass
+
+    # 2. resume_files 행 삭제
+    supabase.table("resume_files").delete().eq("id", resume_file_id).execute()
+
+    # 3. 연결된 applicant 삭제 (해당 applicant에 다른 resume_file이 없을 때만)
+    remaining = (
+        supabase
+        .table("resume_files")
+        .select("id")
+        .eq("applicant_id", applicant_id)
+        .execute()
+    )
+
+    if not remaining.data:
+        supabase.table("applicants").delete().eq("id", applicant_id).execute()
+
+    return {"success": True, "data": {"deleted_resume_file_id": resume_file_id}}
+
+
 @router.post("/job-postings/{job_posting_id}/resumes")
 async def upload_resumes(
     job_posting_id: int,
@@ -210,6 +291,8 @@ async def upload_resumes(
             "resume_file_id": resume_file["id"],
             "applicant_id": applicant["id"],
             "original_filename": resume_file["original_filename"],
+            "file_type": resume_file["file_type"],
+            "file_size_bytes": resume_file["file_size_bytes"],
             "processing_status": resume_file["processing_status"],
         })
 
