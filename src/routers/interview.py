@@ -75,6 +75,26 @@ async def get_interview_questions(applicant_id: int):
 _LAW_CONTEXT = """금지 질문: 결혼·혼인·출산·임신·육아·나이·고향·출신지역·가족관계·종교·정치·신체조건·학벌
 경고 질문: 야근가능여부·주말근무·지방발령·군복무"""
 
+# 질문 유형 정의 — LLM이 정확하게 분류하도록 프롬프트에 주입
+_TYPE_DEFINITIONS = """질문 유형 정의 (반드시 아래 기준에 따라 분류):
+- 행동: 과거 경험 기반. "~했던 경험", "~했을 때 어떻게", 갈등·협업·문제해결·성과 관련 행동 중심 질문
+- 역량: 직무 전문성·실무 능력 평가. "설계한다면", "노하우", "접근 방식" 등 능력의 깊이를 측정하는 질문
+- 우려검증: 이력서 공백·잦은 이직·기술 부족 등 리스크 확인. "짧은 재직", "공백기", "부족한 부분" 관련 질문
+- 기술검증: CS 기초(자료구조·알고리즘·네트워크·DB)·코딩·특정 기술 개념을 객관적으로 묻는 질문
+- 기타: 지원동기·커리어목표·문화적합도 등 위 4가지에 해당하지 않는 경우에만 사용 (최소화할 것)"""
+
+def _build_system_prompt() -> str:
+    return f"""HR 면접 질문 전문가. JSON 배열만 출력. 마크다운·설명 금지.
+
+{_TYPE_DEFINITIONS}
+
+공정채용 법령 준수:
+{_LAW_CONTEXT}
+→ 금지 질문이면 compliance_status="심각", 우회표현이면"경고", 직무관련이면"준수"
+
+출력형식:
+[{{"question_type":"행동|역량|우려검증|기술검증|기타","question_text":"질문","compliance_status":"준수|경고|심각","compliance_reason":"한줄근거"}}]"""
+
 @router.post("/applicants/{applicant_id}/interview-questions")
 async def generate_interview_questions(applicant_id: int, body: GenerateRequest):
     import asyncio
@@ -137,18 +157,13 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
     if not resume_text:
         resume_text = "이력서 정보 없음"
 
-    # 3) GPT-4o-mini 호출 — 경량 프롬프트
+    # 3) GPT-4o-mini 호출
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     question_types_str = ", ".join(body.question_types)
-
-    system_prompt = f"""HR 면접 질문 전문가. JSON 배열만 출력.
-금지({_LAW_CONTEXT})에 해당하면 compliance_status="심각", 우회표현이면"경고", 직무관련이면"준수".
-출력형식(마크다운·설명 금지):
-[{{"question_type":"행동|역량|우려검증|기술검증|기타","question_text":"질문","compliance_status":"준수|경고|심각","compliance_reason":"한줄근거"}}]"""
-
+    system_prompt = _build_system_prompt()
     user_prompt = f"""공고: {job_info}
 이력서: {resume_text}
-유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성."""
+요청 유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성. 기타 유형은 위 4가지에 모두 해당하지 않을 때만 사용."""
 
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
@@ -351,14 +366,10 @@ async def bulk_generate_interview_questions(body: BulkGenerateRequest):
         model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         question_types_str = ", ".join(body.question_types)
 
-        system_prompt = f"""HR 면접 질문 전문가. JSON 배열만 출력.
-금지({_LAW_CONTEXT})에 해당하면 compliance_status="심각", 우회표현이면"경고", 직무관련이면"준수".
-출력형식(마크다운·설명 금지):
-[{{"question_type":"행동|역량|우려검증|기술검증|기타","question_text":"질문","compliance_status":"준수|경고|심각","compliance_reason":"한줄근거"}}]"""
-
+        system_prompt = _build_system_prompt()
         user_prompt = f"""공고: {job_info}
 이력서: {resume_text}
-유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성."""
+요청 유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성. 기타 유형은 위 4가지에 모두 해당하지 않을 때만 사용."""
 
         try:
             async with httpx.AsyncClient(timeout=90.0) as client:
