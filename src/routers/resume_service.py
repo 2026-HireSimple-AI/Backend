@@ -1,12 +1,12 @@
-from pathlib import Path
+import io
 import pdfplumber
 from docx import Document
 
 
-def extract_pdf_text(file_path: Path) -> str:
+def extract_pdf_text(file_bytes: bytes) -> str:
     texts = []
 
-    with pdfplumber.open(file_path) as pdf:
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
             page_text = page.extract_text()
             if page_text:
@@ -15,8 +15,8 @@ def extract_pdf_text(file_path: Path) -> str:
     return "\n".join(texts)
 
 
-def extract_docx_text(file_path: Path) -> str:
-    doc = Document(file_path)
+def extract_docx_text(file_bytes: bytes) -> str:
+    doc = Document(io.BytesIO(file_bytes))
 
     texts = []
 
@@ -27,16 +27,16 @@ def extract_docx_text(file_path: Path) -> str:
     return "\n".join(texts)
 
 
-def extract_resume_text(file_path: Path) -> str:
-    suffix = file_path.suffix.lower()
+def extract_resume_text(file_bytes: bytes, filename: str) -> str:
+    suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
 
-    if suffix == ".pdf":
-        return extract_pdf_text(file_path)
+    if suffix == "pdf":
+        return extract_pdf_text(file_bytes)
 
-    if suffix == ".docx":
-        return extract_docx_text(file_path)
+    if suffix == "docx":
+        return extract_docx_text(file_bytes)
 
-    raise ValueError(f"지원하지 않는 파일 형식입니다: {suffix}")
+    raise ValueError(f"지원하지 않는 파일 형식입니다: .{suffix}")
 
 import re
 import random

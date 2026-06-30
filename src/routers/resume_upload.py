@@ -1,5 +1,4 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from pathlib import Path
 import uuid
 from database import supabase
 
@@ -10,14 +9,37 @@ router = APIRouter(
     tags=["resume"]
 )
 
-UPLOAD_DIR = Path("uploads/resumes")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+RESUME_STORAGE_BUCKET = "resumes"
+
 
 def get_pii_value(pii: list[dict], pii_type: str):
     for item in pii:
         if item["type"] == pii_type:
             return item["value"]
     return None
+
+
+def upload_resume_to_storage(content: bytes, original_filename: str) -> str:
+    """원본 파일을 Supabase Storage에 업로드하고 storage 내 경로를 반환한다.
+
+    Storage 키에는 한글/공백 등이 들어가면 InvalidKey 에러가 나므로,
+    경로는 UUID + 확장자로만 구성하고 원본 파일명은 DB의
+    original_filename 컬럼에 따로 보관한다.
+    """
+    suffix = (
+        original_filename.rsplit(".", 1)[-1].lower()
+        if "." in original_filename
+        else ""
+    )
+    storage_path = f"{uuid.uuid4()}.{suffix}" if suffix else str(uuid.uuid4())
+
+    supabase.storage.from_(RESUME_STORAGE_BUCKET).upload(
+        path=storage_path,
+        file=content,
+        file_options={"content-type": "application/octet-stream"},
+    )
+
+    return storage_path
 
 
 def save_applicant(supabase, job_posting_id: int, result: dict) -> dict:
@@ -55,6 +77,7 @@ def save_applicant(supabase, job_posting_id: int, result: dict) -> dict:
     applicant["masked_code"] = masked_code
     return applicant
 
+
 def save_resume_file(
     supabase,
     applicant_id: int,
@@ -86,6 +109,7 @@ def save_resume_file(
 
     return response.data[0]
 
+
 def save_resume(
     supabase,
     job_posting_id: int,
@@ -109,6 +133,7 @@ def save_resume(
 
     return response.data[0]
 
+
 @router.post("/job-postings/{job_posting_id}/resumes")
 async def upload_resumes(
     job_posting_id: int,
@@ -120,14 +145,19 @@ async def upload_resumes(
     for file in files:
         content = await file.read()
 
-        file_type = Path(file.filename).suffix.lower().replace(".", "")
-        saved_filename = f"{uuid.uuid4()}_{file.filename}"
-        file_path = UPLOAD_DIR / saved_filename
+        file_type = (
+            file.filename.lower().rsplit(".", 1)[-1]
+            if "." in file.filename
+            else ""
+        )
 
-        with open(file_path, "wb") as f:
-            f.write(content)
+        try:
+            extracted_text = extract_resume_text(content, file.filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-        extracted_text = extract_resume_text(file_path)
+        # 디스크에 저장하지 않고 원본만 Storage에 업로드
+        storage_path = upload_resume_to_storage(content, file.filename)
 
         resumes.append({
             "filename": file.filename,
@@ -136,7 +166,7 @@ async def upload_resumes(
 
         file_meta_list.append({
             "original_filename": file.filename,
-            "file_path": str(file_path),
+            "file_path": storage_path,
             "file_type": file_type,
             "file_size_bytes": len(content),
             "extracted_text": extracted_text,
@@ -182,11 +212,11 @@ async def upload_resumes(
             "original_filename": resume_file["original_filename"],
             "processing_status": resume_file["processing_status"],
         })
-    
+
     return {
-    "success": True,
-    "data": {
-        "uploaded_count": len(files_response),
-        "files": files_response  # ← .files로 감싸기
+        "success": True,
+        "data": {
+            "uploaded_count": len(files_response),
+            "files": files_response,
         }
     }
