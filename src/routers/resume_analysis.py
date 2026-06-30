@@ -53,16 +53,6 @@ async def analyze_resume(applicant_id: int):
         .execute()
 
     # 4. 평가 기준 조회
-    # type_criteria = supabase.table("type_criteria")\
-    #     .select("*")\
-    #     .eq("job_posting_id", job_posting_id)\
-    #     .execute()
-
-    # detail_criteria = supabase.table("detail_criteria")\
-    #     .select("*")\
-    #     .execute()
-
-    # 4. 평가 기준 조회
     criteria = supabase.table("criteria")\
         .select("*")\
         .eq("job_posting_id", job_posting_id)\
@@ -92,6 +82,7 @@ async def analyze_resume(applicant_id: int):
 
 아래 JSON 형식으로만 응답하세요. 다른 설명은 절대 하지 마세요.
 {{
+    "career": "총 경력을 간결하게 표기 (예: 3년, 1년 2개월)",
     "requirement_score": 자격조건 점수(0-100),
     "task_score": 주요업무 점수(0-100),
     "preference_score": 우대사항 점수(0-100),
@@ -175,6 +166,11 @@ async def analyze_resume(applicant_id: int):
         (scores.get("preference_score", 0) * 0.1),
         2
     )
+
+    career_value = scores.get("career")
+    supabase.table("applicants").update({
+        "career": career_value
+    }).eq("id", applicant_id).execute()
     
     # 11. applicant_scores 저장
     supabase.table("applicant_scores").upsert({
