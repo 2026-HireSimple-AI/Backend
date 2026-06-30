@@ -77,6 +77,27 @@ def normalize_content(value: Any) -> list[str]:
     return [str(value)]
 
 
+# def to_front_formatted_response(job_posting_id: int, formatted_posting: dict, title: str) -> dict:
+#     return {
+#         "job_posting_id": job_posting_id,
+#         "title": title,
+#         "formatted_posting": [
+#             {
+#                 "category": "자격 조건",
+#                 "content": normalize_content(formatted_posting.get("requirement")),
+#             },
+#             {
+#                 "category": "주요 업무",
+#                 "content": normalize_content(formatted_posting.get("task")),
+#             },
+#             {
+#                 "category": "우대 사항",
+#                 "content": normalize_content(formatted_posting.get("preference")),
+#             },
+#         ],
+#         "skills_stack": formatted_posting.get("skill_stack", []),
+#     }
+
 def to_front_formatted_response(job_posting_id: int, formatted_posting: dict, title: str) -> dict:
     return {
         "job_posting_id": job_posting_id,
@@ -94,8 +115,11 @@ def to_front_formatted_response(job_posting_id: int, formatted_posting: dict, ti
                 "category": "우대 사항",
                 "content": normalize_content(formatted_posting.get("preference")),
             },
+            {
+                "category": "기술 스택",
+                "content": normalize_content(formatted_posting.get("skill_stack")),
+            },
         ],
-        "skills_stack": formatted_posting.get("skill_stack", []),
     }
 
 
