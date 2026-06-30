@@ -227,7 +227,7 @@ def format_job_posting(job_posting_id: int):
             break
 
         print(f"필수 항목 누락, 재시도 {i + 1}/{max_retry}")
-        print(formatted_posting)
+        # print(formatted_posting)
 
     else:
         raise HTTPException(
