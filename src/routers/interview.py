@@ -23,6 +23,11 @@ class GenerateRequest(BaseModel):
     question_count: int = 5
     question_types: List[str] = ["행동", "역량", "우려검증", "기술검증", "기타"]
 
+class BulkGenerateRequest(BaseModel):
+    applicant_ids: List[int]
+    question_count: int = 5
+    question_types: List[str] = ["행동", "역량", "우려검증", "기술검증", "기타"]
+
 
 class UpdateQuestionRequest(BaseModel):
     question_text: str
@@ -263,6 +268,166 @@ async def delete_interview_question(question_id: int):
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"삭제 실패: {str(e)}")
+
+
+# ---------- POST: 일괄 생성 (분석 페이지 → 인원 확정 시) ----------
+
+@router.post("/interview-questions/bulk-generate")
+async def bulk_generate_interview_questions(body: BulkGenerateRequest):
+    """
+    여러 지원자 면접 질문을 동시에 생성.
+    이미 질문이 있는 지원자는 건너뜀.
+    """
+    import asyncio
+
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
+
+    if not body.applicant_ids:
+        return {"success": True, "results": [], "generated": 0, "skipped": 0}
+
+    async def _generate_one(applicant_id: int) -> dict:
+        loop = asyncio.get_event_loop()
+
+        # 이미 질문 존재 시 스킵
+        def _check_existing():
+            return supabase.table("interview_questions")\
+                .select("id").eq("applicant_id", applicant_id).limit(1).execute()
+
+        existing = await loop.run_in_executor(None, _check_existing)
+        if existing.data:
+            return {"applicant_id": applicant_id, "status": "skipped"}
+
+        # 지원자 + 이력서 조회
+        def _get_applicant():
+            return supabase.table("applicants").select("*").eq("id", applicant_id).execute()
+        def _get_resume_files():
+            return supabase.table("resume_files").select("extracted_text").eq("applicant_id", applicant_id).execute()
+
+        applicant_res, rf_res = await asyncio.gather(
+            loop.run_in_executor(None, _get_applicant),
+            loop.run_in_executor(None, _get_resume_files),
+        )
+
+        if not applicant_res.data:
+            return {"applicant_id": applicant_id, "status": "error", "detail": "지원자 없음"}
+
+        applicant = applicant_res.data[0]
+        job_posting_id = applicant.get("job_posting_id")
+
+        def _get_job():
+            if not job_posting_id:
+                return None
+            return supabase.table("job_postings").select("title, raw_content").eq("id", job_posting_id).execute()
+        def _get_resumes():
+            if not job_posting_id:
+                return None
+            return supabase.table("resumes").select("resume_text").eq("job_posting_id", job_posting_id).execute()
+
+        job_res, resume_res = await asyncio.gather(
+            loop.run_in_executor(None, _get_job),
+            loop.run_in_executor(None, _get_resumes),
+        )
+
+        job_info = "채용 공고 정보 없음"
+        if job_res and job_res.data:
+            jp = job_res.data[0]
+            raw = jp.get("raw_content") or ""
+            if isinstance(raw, list):
+                raw = " ".join(str(r) for r in raw)
+            job_info = f"{jp.get('title', '')}\n{raw[:800]}"
+
+        resume_text = ""
+        if resume_res and resume_res.data:
+            texts = [r.get("resume_text") or "" for r in resume_res.data if r.get("resume_text")]
+            resume_text = "\n".join(texts[:2])[:800]
+        if not resume_text and rf_res and rf_res.data:
+            texts = [r.get("extracted_text") or "" for r in rf_res.data if r.get("extracted_text")]
+            resume_text = "\n".join(texts[:2])[:800]
+        if not resume_text:
+            resume_text = "이력서 정보 없음"
+
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        question_types_str = ", ".join(body.question_types)
+
+        system_prompt = f"""HR 면접 질문 전문가. JSON 배열만 출력.
+금지({_LAW_CONTEXT})에 해당하면 compliance_status="심각", 우회표현이면"경고", 직무관련이면"준수".
+출력형식(마크다운·설명 금지):
+[{{"question_type":"행동|역량|우려검증|기술검증|기타","question_text":"질문","compliance_status":"준수|경고|심각","compliance_reason":"한줄근거"}}]"""
+
+        user_prompt = f"""공고: {job_info}
+이력서: {resume_text}
+유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성."""
+
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                resp = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt}
+                        ],
+                        "temperature": 0.3,
+                        "max_tokens": 1500
+                    }
+                )
+
+            if resp.status_code != 200:
+                return {"applicant_id": applicant_id, "status": "error", "detail": f"OpenAI {resp.status_code}"}
+
+            content = resp.json()["choices"][0]["message"]["content"]
+            import re
+            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            if json_match:
+                questions_list = json.loads(json_match.group())
+            else:
+                parsed = json.loads(content)
+                questions_list = parsed if isinstance(parsed, list) else []
+
+        except Exception as e:
+            return {"applicant_id": applicant_id, "status": "error", "detail": str(e)}
+
+        valid_statuses = {"준수", "경고", "심각"}
+        valid_types = {"행동", "역량", "우려검증", "기술검증", "기타"}
+        rows = []
+        for q in questions_list[:body.question_count]:
+            raw_type = (q.get("question_type") or "기타").replace(" ", "")
+            compliance = q.get("compliance_status", "준수")
+            rows.append({
+                "applicant_id": applicant_id,
+                "question_type": raw_type if raw_type in valid_types else "기타",
+                "question_text": q.get("question_text", ""),
+                "created_by": "AI",
+                "compliance_status": compliance if compliance in valid_statuses else "준수",
+                "revised_question_text": None
+            })
+
+        def _insert():
+            if rows:
+                return supabase.table("interview_questions").insert(rows).execute()
+            return None
+
+        await loop.run_in_executor(None, _insert)
+        return {"applicant_id": applicant_id, "status": "generated", "count": len(rows)}
+
+    results = await asyncio.gather(*[_generate_one(aid) for aid in body.applicant_ids])
+    results_list = list(results)
+
+    generated = sum(1 for r in results_list if r["status"] == "generated")
+    skipped = sum(1 for r in results_list if r["status"] == "skipped")
+    errors = sum(1 for r in results_list if r["status"] == "error")
+
+    return {
+        "success": True,
+        "results": results_list,
+        "generated": generated,
+        "skipped": skipped,
+        "errors": errors
+    }
 
 
 # ---------- POST: 단일 질문 직접 추가 ----------
