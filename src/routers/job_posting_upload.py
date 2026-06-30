@@ -8,6 +8,7 @@ from routers.job_posting_service import (
     job_posting_formating,
 )
 from database import supabase, supabase_auth
+import sys
 
 
 router = APIRouter(
@@ -159,6 +160,15 @@ def upload_job_posting(req: UrlRequest, authorization: Optional[str] = Header(No
     if not result.get("raw_content"):
         raise HTTPException(status_code=400, detail="채용공고 본문을 가져오지 못했습니다.")
 
+    # 이미지 URL 리스트인 경우 업로드 시점에 즉시 텍스트 추출 (URL 만료 방지)
+    raw_content = result["raw_content"]
+    if isinstance(raw_content, list) and raw_content:
+        try:
+            raw_content = extract_job_posting_text(raw_content, is_url=True)
+            print(f"이미지 텍스트 추출 완료: {len(raw_content)}자")
+        except Exception as e:
+            print(f"이미지 텍스트 추출 실패, URL 리스트 그대로 저장: {e}")
+
     user_id = get_user_id_from_header(authorization)
 
     response = (
@@ -168,7 +178,7 @@ def upload_job_posting(req: UrlRequest, authorization: Optional[str] = Header(No
             "title": result["title"],
             "input_type": result["input_type"],
             "source_url": result["source_url"],
-            "raw_content": result["raw_content"],
+            "raw_content": raw_content,
             "conts_summary": result["conts_summary"],
         })
         .execute()
@@ -238,25 +248,53 @@ def format_job_posting(job_posting_id: int):
     title = posting["title"]
     summary = json_to_str(posting.get("conts_summary"))
     raw_content = posting.get("raw_content")
+    source_url = posting.get("source_url", "")
 
-    posting_text = raw_content_to_posting_text(raw_content)
+    # 1) DB에 저장된 raw_content로 텍스트 추출
+    posting_text = ""
+    try:
+        posting_text = raw_content_to_posting_text(raw_content)
+    except Exception as e:
+        print(f"[format] raw_content 추출 실패: {e}", file=sys.stderr)
 
-    max_retry = 10
+    print(f"[format] raw_content 타입={type(raw_content).__name__}, posting_text 길이={len(posting_text)}", file=sys.stderr)
+
+    # 2) 텍스트가 짧거나 없으면 source_url로 재스크래핑
+    if len(posting_text) < 200 and source_url:
+        print(f"[format] 텍스트 부족, source_url 재스크래핑: {source_url}", file=sys.stderr)
+        try:
+            fresh = scrape_job_posting(source_url)
+            fresh_raw = fresh.get("raw_content")
+            if fresh_raw:
+                fresh_text = raw_content_to_posting_text(fresh_raw)
+                if len(fresh_text) > len(posting_text):
+                    posting_text = fresh_text
+                    print(f"[format] 재스크래핑 성공: {len(posting_text)}자", file=sys.stderr)
+        except Exception as e:
+            print(f"[format] 재스크래핑 실패: {e}", file=sys.stderr)
+
+    # 3) conts_summary와 합쳐서 LLM에 전달
+    if summary:
+        posting_text = f"{summary}\n\n{posting_text}" if posting_text else summary
+
+    print(f"[format] LLM 입력 텍스트 길이={len(posting_text)}", file=sys.stderr)
+
+    max_retry = 3  # 텍스트가 있으면 3회면 충분
     formatted_posting = None
 
     for i in range(max_retry):
         formatted_posting = job_posting_formating(title, summary, posting_text)
+        print(f"[format] LLM 결과: { {k: bool(v) for k, v in formatted_posting.items()} }", file=sys.stderr)
 
         if has_required_values(formatted_posting):
             break
 
-        print(f"필수 항목 누락, 재시도 {i + 1}/{max_retry}")
-        # print(formatted_posting)
+        print(f"필수 항목 누락, 재시도 {i + 1}/{max_retry}", file=sys.stderr)
 
     else:
         raise HTTPException(
             status_code=500,
-            detail=f"필수 항목 추출 실패: {formatted_posting}",
+            detail=f"공고 내용이 부족하여 필수 항목을 추출할 수 없습니다. 공고 본문 텍스트가 충분한지 확인해주세요. (추출된 내용: {posting_text[:300]})",
         )
 
     try:
@@ -279,6 +317,13 @@ def format_job_posting(job_posting_id: int):
         "requirement": 1,
         "task": 2,
         "preference": 3,
+        "career": 4,
+        "education": 5,
+        "field": 6,
+    }
+    # is_required: requirement만 True, 나머지는 False
+    is_required_map = {
+        "requirement": True,
     }
 
     for category, content in formatted_posting.items():
@@ -290,7 +335,7 @@ def format_job_posting(job_posting_id: int):
                 "job_posting_id": job_posting_id,
                 "category": category,
                 "content": content,
-                "sort_order": sort_order_map.get(category),
+                "sort_order": sort_order_map.get(category, 99),
             }).execute()
 
     skill_rows = [

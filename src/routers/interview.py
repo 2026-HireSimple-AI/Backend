@@ -66,123 +66,84 @@ async def get_interview_questions(applicant_id: int):
 
 # ---------- POST: RAG 검수 + GPT-4o-mini 질문 생성 ----------
 
+# 공정채용 법령 — 매번 RAG 조회 대신 핵심만 하드코딩 (RAG 지연 제거)
+_LAW_CONTEXT = """금지 질문: 결혼·혼인·출산·임신·육아·나이·고향·출신지역·가족관계·종교·정치·신체조건·학벌
+경고 질문: 야근가능여부·주말근무·지방발령·군복무"""
+
 @router.post("/applicants/{applicant_id}/interview-questions")
 async def generate_interview_questions(applicant_id: int, body: GenerateRequest):
-    """
-    1. 지원자 이력서 + 공고문 조회
-    2. RAG로 공정채용 법령 컨텍스트 검색
-    3. GPT-4o-mini에게 질문 생성 + 법령 준수 검수를 한 번에 요청
-    4. DB 저장
-    """
+    import asyncio
 
-    # 1) 지원자 정보
-    applicant_res = supabase.table("applicants").select("*").eq("id", applicant_id).execute()
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
+
+    # 1) DB 쿼리 병렬 실행 (순차→동시)
+    def _get_applicant():
+        return supabase.table("applicants").select("*").eq("id", applicant_id).execute()
+
+    def _get_resume_files():
+        return supabase.table("resume_files").select("extracted_text").eq("applicant_id", applicant_id).execute()
+
+    loop = asyncio.get_event_loop()
+    applicant_res, rf_res = await asyncio.gather(
+        loop.run_in_executor(None, _get_applicant),
+        loop.run_in_executor(None, _get_resume_files),
+    )
+
     if not applicant_res.data:
         raise HTTPException(status_code=404, detail="지원자를 찾을 수 없습니다.")
     applicant = applicant_res.data[0]
     job_posting_id = applicant.get("job_posting_id")
 
-    # 2) 채용 공고
+    # 2) 공고 + 이력서 병렬 조회
+    def _get_job():
+        if not job_posting_id:
+            return None
+        return supabase.table("job_postings").select("title, raw_content").eq("id", job_posting_id).execute()
+
+    def _get_resumes():
+        if not job_posting_id:
+            return None
+        return supabase.table("resumes").select("resume_text").eq("job_posting_id", job_posting_id).execute()
+
+    job_res, resume_res = await asyncio.gather(
+        loop.run_in_executor(None, _get_job),
+        loop.run_in_executor(None, _get_resumes),
+    )
+
+    # 공고 텍스트 (800자로 축약 — 핵심만)
     job_info = "채용 공고 정보 없음"
-    if job_posting_id:
-        try:
-            job_res = supabase.table("job_postings").select("*").eq("id", job_posting_id).execute()
-            if job_res.data:
-                jp = job_res.data[0]
-                job_info = f"제목: {jp.get('title', '')}\n\n{jp.get('raw_content', '')[:3000]}"
-        except Exception:
-            pass
+    if job_res and job_res.data:
+        jp = job_res.data[0]
+        raw = jp.get("raw_content") or ""
+        if isinstance(raw, list):
+            raw = " ".join(str(r) for r in raw)
+        job_info = f"{jp.get('title', '')}\n{raw[:800]}"
 
-    # 3) 이력서 텍스트
-    resume_text = "이력서 정보 없음"
-    try:
-        # resumes 테이블에서 job_posting_id로 조회
-        resume_res = supabase.table("resumes") \
-            .select("resume_text, original_filename") \
-            .eq("job_posting_id", job_posting_id) \
-            .execute()
-        if resume_res.data:
-            texts = [r.get("resume_text", "") or "" for r in resume_res.data if r.get("resume_text")]
-            if texts:
-                resume_text = "\n\n---\n\n".join(texts[:3])  # 최대 3개
-    except Exception:
-        pass
+    # 이력서 텍스트 (800자로 축약)
+    resume_text = ""
+    if resume_res and resume_res.data:
+        texts = [r.get("resume_text") or "" for r in resume_res.data if r.get("resume_text")]
+        resume_text = "\n".join(texts[:2])[:800]
+    if not resume_text and rf_res and rf_res.data:
+        texts = [r.get("extracted_text") or "" for r in rf_res.data if r.get("extracted_text")]
+        resume_text = "\n".join(texts[:2])[:800]
+    if not resume_text:
+        resume_text = "이력서 정보 없음"
 
-    # resume_files 테이블 fallback (extracted_text)
-    if resume_text == "이력서 정보 없음":
-        try:
-            rf_res = supabase.table("resume_files") \
-                .select("extracted_text, original_filename") \
-                .eq("applicant_id", applicant_id) \
-                .execute()
-            if rf_res.data:
-                texts = [r.get("extracted_text", "") or "" for r in rf_res.data if r.get("extracted_text")]
-                if texts:
-                    resume_text = "\n\n---\n\n".join(texts[:3])
-        except Exception:
-            pass
-
-    # 4) RAG: 공정채용 법령 검색
-    rag_query = "면접 질문 금지 항목 개인정보 블라인드 채용 위반 출신지역 가족관계 혼인 나이 성별"
-    law_context = await retrieve(rag_query, n_results=6)
-
-    if not law_context:
-        # RAG 문서 없을 때 핵심 법령 하드코딩 fallback
-        law_context = """[채용절차법 제4조의3] 구인자는 직무 수행에 필요하지 않은 다음 정보를 요구할 수 없다:
-1. 용모·키·체중 등 신체적 조건
-2. 출신지역·혼인여부·재산
-3. 직계 존비속 및 형제자매의 학력·직업·재산
-
-[블라인드 채용 위반 기준]
-- 출신학교를 유추할 수 있는 질문 금지
-- 출신지역 유추 가능 질문 금지
-- 가족관계 유추 가능 질문 금지
-- 생년월일·연령 유추 가능 질문 금지
-- 성별 유추 가능 질문 금지 (군복무, 여대 졸업 등)
-- 종교, 정치적 성향, 임신·출산 계획 질문 금지"""
-
-    # 5) GPT-4o-mini 호출
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if not openai_key:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY가 설정되지 않았습니다.")
-
+    # 3) GPT-4o-mini 호출 — 경량 프롬프트
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     question_types_str = ", ".join(body.question_types)
 
-    system_prompt = f"""당신은 공정채용 전문가이자 HR 면접 질문 설계자입니다.
-채용 공고와 지원자 이력서를 분석하여 맞춤 면접 질문을 생성하고,
-아래 공정채용 법령 기준에 따라 각 질문의 법령 준수 여부를 판단합니다.
+    system_prompt = f"""HR 면접 질문 전문가. JSON 배열만 출력.
+금지({_LAW_CONTEXT})에 해당하면 compliance_status="심각", 우회표현이면"경고", 직무관련이면"준수".
+출력형식(마크다운·설명 금지):
+[{{"question_type":"행동|역량|우려검증|기술검증|기타","question_text":"질문","compliance_status":"준수|경고|심각","compliance_reason":"한줄근거"}}]"""
 
-=== 공정채용 법령 기준 (RAG 검색 결과) ===
-{law_context}
-
-=== compliance_status 판단 기준 ===
-- "준수": 직무와 관련된 질문, 법령 위반 없음
-- "경고": 개인 신상을 간접적으로 유추할 수 있거나 주의가 필요한 질문
-- "심각": 채용절차법 제4조의3 또는 블라인드 채용 가이드라인을 명백히 위반하는 질문
-  (출신지역, 가족관계, 혼인여부, 나이, 성별, 신체조건, 학벌 직접 질문 등)
-
-=== 출력 형식 ===
-반드시 JSON 배열만 출력하세요. 마크다운, 설명, 코드블록 없이 순수 JSON 배열만:
-[
-  {{
-    "question_type": "행동 또는 역량 또는 우려검증 또는 기술검증 또는 기타",
-    "question_text": "질문 내용",
-    "compliance_status": "준수 또는 경고 또는 심각",
-    "compliance_reason": "법령 준수 판단 근거 한 줄"
-  }}
-]"""
-
-    user_prompt = f"""아래 정보를 바탕으로 면접 질문 {body.question_count}개를 생성하고 법령 준수 여부를 판단하세요.
-질문 유형: [{question_types_str}] 에서 골고루 선택
-
-=== 채용 공고 ===
-{job_info}
-
-=== 지원자 이력서 ===
-{resume_text[:2000]}
-
-반드시 정확히 {body.question_count}개의 질문을 JSON 배열로 출력하세요. {body.question_count}개 미만이면 안 됩니다."""
+    user_prompt = f"""공고: {job_info}
+이력서: {resume_text}
+유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성."""
 
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
@@ -198,7 +159,8 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    "temperature": 0.7
+                    "temperature": 0.3,
+                    "max_tokens": 1500
                 }
             )
 
@@ -229,96 +191,42 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"GPT 호출 실패: {str(e)}")
 
-    # 6) 기존 질문 삭제
-    try:
-        supabase.table("interview_questions").delete().eq("applicant_id", applicant_id).execute()
-    except Exception:
-        pass
-
-    # 7) DB 저장
+    # 6) 기존 질문 삭제 + 신규 일괄 INSERT 병렬 실행
     valid_statuses = {"준수", "경고", "심각"}
     valid_types = {"행동", "역량", "우려검증", "기술검증", "기타"}
 
-    inserted = []
+    rows = []
+    compliance_reasons = []
     for q in questions_list[:body.question_count]:
         raw_type = (q.get("question_type") or "기타").replace(" ", "")
         compliance = q.get("compliance_status", "준수")
-
-        row = {
+        rows.append({
             "applicant_id": applicant_id,
             "question_type": raw_type if raw_type in valid_types else "기타",
             "question_text": q.get("question_text", ""),
             "created_by": "AI",
             "compliance_status": compliance if compliance in valid_statuses else "준수",
             "revised_question_text": None
-        }
-        # 재시도 로직 추가 (최대 2번)
-        for attempt in range(2):
-            try:
-                ins = supabase.table("interview_questions").insert(row).execute()
-                if ins.data:
-                    ins.data[0]["compliance_reason"] = q.get("compliance_reason", "")
-                    inserted.append(ins.data[0])
-                    break  # 성공하면 재시도 중단
-            except Exception as e:
-                print(f"[ERROR] 시도 {attempt+1} 실패: {type(e).__name__}: {e}")
-                if attempt == 1:
-                    print(f"[ERROR] 최종 실패, 스킵: {row['question_text'][:30]}")
-         # 8) 부족한 경우 보완 생성
-    shortage = body.question_count - len(inserted)
-    if shortage > 0:
-        print(f"[INFO] {shortage}개 부족 → 보완 생성 시도")
-        supplement_prompt = f"""면접 질문이 {shortage}개 부족합니다.
-추가로 정확히 {shortage}개만 JSON 배열로 생성하세요.
-질문 유형: [{question_types_str}]
-직무: {job_info[:500]}
+        })
+        compliance_reasons.append(q.get("compliance_reason", ""))
 
-반드시 {shortage}개만 순수 JSON 배열로 출력하세요."""
+    def _delete_and_insert():
+        supabase.table("interview_questions").delete().eq("applicant_id", applicant_id).execute()
+        if rows:
+            return supabase.table("interview_questions").insert(rows).execute()
+        return None
 
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp2 = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {openai_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": supplement_prompt}
-                        ],
-                        "temperature": 0.7
-                    }
-                )
-            content2 = resp2.json()["choices"][0]["message"]["content"]
-            json_match2 = re.search(r'\[.*\]', content2, re.DOTALL)
-            if json_match2:
-                extra_list = json.loads(json_match2.group())
-                for q in extra_list[:shortage]:
-                    raw_type = (q.get("question_type") or "기타").replace(" ", "")
-                    compliance = q.get("compliance_status", "준수")
-                    row = {
-                        "applicant_id": applicant_id,
-                        "question_type": raw_type if raw_type in valid_types else "기타",
-                        "question_text": q.get("question_text", ""),
-                        "created_by": "AI",
-                        "compliance_status": compliance if compliance in valid_statuses else "준수",
-                        "revised_question_text": None
-                    }
-                    try:
-                        ins = supabase.table("interview_questions").insert(row).execute()
-                        if ins.data:
-                            inserted.append(ins.data[0])
-                    except Exception as e:
-                        print(f"[ERROR] 보완 INSERT 실패: {e}")
-        except Exception as e:
-            print(f"[INFO] 보완 생성 실패: {e}")
-            
+    ins_res = await loop.run_in_executor(None, _delete_and_insert)
+
+    inserted = []
+    if ins_res and ins_res.data:
+        for i, row_data in enumerate(ins_res.data):
+            row_data["compliance_reason"] = compliance_reasons[i] if i < len(compliance_reasons) else ""
+            inserted.append(row_data)
+
     return {
         "success": True,
-        "message": f"면접 질문 {len(inserted)}개 생성 완료 (RAG 검수 적용)",
+        "message": f"면접 질문 {len(inserted)}개 생성 완료",
         "applicant_id": applicant_id,
         "data": inserted
     }
