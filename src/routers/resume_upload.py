@@ -1,5 +1,4 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from pathlib import Path
 import uuid
 from database import supabase
 
@@ -10,14 +9,37 @@ router = APIRouter(
     tags=["resume"]
 )
 
-UPLOAD_DIR = Path("uploads/resumes")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+RESUME_STORAGE_BUCKET = "resumes"
+
 
 def get_pii_value(pii: list[dict], pii_type: str):
     for item in pii:
         if item["type"] == pii_type:
             return item["value"]
     return None
+
+
+def upload_resume_to_storage(content: bytes, original_filename: str) -> str:
+    """원본 파일을 Supabase Storage에 업로드하고 storage 내 경로를 반환한다.
+
+    Storage 키에는 한글/공백 등이 들어가면 InvalidKey 에러가 나므로,
+    경로는 UUID + 확장자로만 구성하고 원본 파일명은 DB의
+    original_filename 컬럼에 따로 보관한다.
+    """
+    suffix = (
+        original_filename.rsplit(".", 1)[-1].lower()
+        if "." in original_filename
+        else ""
+    )
+    storage_path = f"{uuid.uuid4()}.{suffix}" if suffix else str(uuid.uuid4())
+
+    supabase.storage.from_(RESUME_STORAGE_BUCKET).upload(
+        path=storage_path,
+        file=content,
+        file_options={"content-type": "application/octet-stream"},
+    )
+
+    return storage_path
 
 
 def save_applicant(supabase, job_posting_id: int, result: dict) -> dict:
@@ -55,6 +77,7 @@ def save_applicant(supabase, job_posting_id: int, result: dict) -> dict:
     applicant["masked_code"] = masked_code
     return applicant
 
+
 def save_resume_file(
     supabase,
     applicant_id: int,
@@ -86,6 +109,7 @@ def save_resume_file(
 
     return response.data[0]
 
+
 def save_resume(
     supabase,
     job_posting_id: int,
@@ -109,6 +133,88 @@ def save_resume(
 
     return response.data[0]
 
+
+@router.get("/job-postings/{job_posting_id}/resumes")
+async def list_resumes(job_posting_id: int):
+    """특정 공고에 달린 이력서(지원자) 목록을 조회한다."""
+    response = (
+        supabase
+        .table("applicants")
+        .select(
+            "id, masked_code, real_name, phone, email,"
+            "resume_files(id, original_filename, file_type, file_size_bytes, processing_status)"
+        )
+        .eq("job_posting_id", job_posting_id)
+        .execute()
+    )
+
+    files_response = []
+
+    for applicant in response.data:
+        resume_files = applicant.get("resume_files") or []
+
+        for resume_file in resume_files:
+            files_response.append({
+                "resume_file_id": resume_file["id"],
+                "applicant_id": applicant["id"],
+                "original_filename": resume_file["original_filename"],
+                "file_type": resume_file["file_type"],
+                "file_size_bytes": resume_file["file_size_bytes"],
+                "processing_status": resume_file["processing_status"],
+            })
+
+    return {
+        "success": True,
+        "data": {
+            "uploaded_count": len(files_response),
+            "files": files_response,
+        }
+    }
+
+
+@router.delete("/resumes/{resume_file_id}")
+async def delete_resume(resume_file_id: int):
+    """이력서 파일 1건과 연관된 지원자, 원본 Storage 파일을 함께 삭제한다."""
+    resume_file_res = (
+        supabase
+        .table("resume_files")
+        .select("id, applicant_id, file_path")
+        .eq("id", resume_file_id)
+        .execute()
+    )
+
+    if not resume_file_res.data:
+        raise HTTPException(status_code=404, detail="이력서 파일을 찾을 수 없습니다.")
+
+    resume_file = resume_file_res.data[0]
+    applicant_id = resume_file["applicant_id"]
+    file_path = resume_file.get("file_path")
+
+    # 1. Storage 원본 파일 삭제 (실패해도 DB 정리는 계속 진행)
+    if file_path:
+        try:
+            supabase.storage.from_(RESUME_STORAGE_BUCKET).remove([file_path])
+        except Exception:
+            pass
+
+    # 2. resume_files 행 삭제
+    supabase.table("resume_files").delete().eq("id", resume_file_id).execute()
+
+    # 3. 연결된 applicant 삭제 (해당 applicant에 다른 resume_file이 없을 때만)
+    remaining = (
+        supabase
+        .table("resume_files")
+        .select("id")
+        .eq("applicant_id", applicant_id)
+        .execute()
+    )
+
+    if not remaining.data:
+        supabase.table("applicants").delete().eq("id", applicant_id).execute()
+
+    return {"success": True, "data": {"deleted_resume_file_id": resume_file_id}}
+
+
 @router.post("/job-postings/{job_posting_id}/resumes")
 async def upload_resumes(
     job_posting_id: int,
@@ -120,14 +226,19 @@ async def upload_resumes(
     for file in files:
         content = await file.read()
 
-        file_type = Path(file.filename).suffix.lower().replace(".", "")
-        saved_filename = f"{uuid.uuid4()}_{file.filename}"
-        file_path = UPLOAD_DIR / saved_filename
+        file_type = (
+            file.filename.lower().rsplit(".", 1)[-1]
+            if "." in file.filename
+            else ""
+        )
 
-        with open(file_path, "wb") as f:
-            f.write(content)
+        try:
+            extracted_text = extract_resume_text(content, file.filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
-        extracted_text = extract_resume_text(file_path)
+        # 디스크에 저장하지 않고 원본만 Storage에 업로드
+        storage_path = upload_resume_to_storage(content, file.filename)
 
         resumes.append({
             "filename": file.filename,
@@ -136,7 +247,7 @@ async def upload_resumes(
 
         file_meta_list.append({
             "original_filename": file.filename,
-            "file_path": str(file_path),
+            "file_path": storage_path,
             "file_type": file_type,
             "file_size_bytes": len(content),
             "extracted_text": extracted_text,
@@ -180,13 +291,15 @@ async def upload_resumes(
             "resume_file_id": resume_file["id"],
             "applicant_id": applicant["id"],
             "original_filename": resume_file["original_filename"],
+            "file_type": resume_file["file_type"],
+            "file_size_bytes": resume_file["file_size_bytes"],
             "processing_status": resume_file["processing_status"],
         })
-    
+
     return {
-    "success": True,
-    "data": {
-        "uploaded_count": len(files_response),
-        "files": files_response  # ← .files로 감싸기
+        "success": True,
+        "data": {
+            "uploaded_count": len(files_response),
+            "files": files_response,
         }
     }

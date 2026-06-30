@@ -3,7 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from routers import analysis, interview, job_posting_upload, resume_analysis, resume_upload, criteria
 from routers.auth import router as auth_router
 
-app = FastAPI()
+from contextlib import asynccontextmanager
+from routers.resume_service import _get_ner
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _get_ner()  # 서버 시작 시 NER 모델 미리 로드
+    yield
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

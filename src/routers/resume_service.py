@@ -1,12 +1,12 @@
-from pathlib import Path
+import io
 import pdfplumber
 from docx import Document
 
 
-def extract_pdf_text(file_path: Path) -> str:
+def extract_pdf_text(file_bytes: bytes) -> str:
     texts = []
 
-    with pdfplumber.open(file_path) as pdf:
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
             page_text = page.extract_text()
             if page_text:
@@ -15,8 +15,8 @@ def extract_pdf_text(file_path: Path) -> str:
     return "\n".join(texts)
 
 
-def extract_docx_text(file_path: Path) -> str:
-    doc = Document(file_path)
+def extract_docx_text(file_bytes: bytes) -> str:
+    doc = Document(io.BytesIO(file_bytes))
 
     texts = []
 
@@ -27,16 +27,16 @@ def extract_docx_text(file_path: Path) -> str:
     return "\n".join(texts)
 
 
-def extract_resume_text(file_path: Path) -> str:
-    suffix = file_path.suffix.lower()
+def extract_resume_text(file_bytes: bytes, filename: str) -> str:
+    suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
 
-    if suffix == ".pdf":
-        return extract_pdf_text(file_path)
+    if suffix == "pdf":
+        return extract_pdf_text(file_bytes)
 
-    if suffix == ".docx":
-        return extract_docx_text(file_path)
+    if suffix == "docx":
+        return extract_docx_text(file_bytes)
 
-    raise ValueError(f"지원하지 않는 파일 형식입니다: {suffix}")
+    raise ValueError(f"지원하지 않는 파일 형식입니다: .{suffix}")
 
 import re
 import random
@@ -50,6 +50,77 @@ class PIIMatch:
     start: int
     end: int
 
+def extract_name_from_header(text: str) -> list[PIIMatch]:
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not lines:
+        return []
+
+    first_line = lines[0]
+
+    # 첫 줄 앞쪽에서 한글 1글자 토큰들이 공백으로 나뉜 경우: 김 지 원 백엔드...
+    tokens = first_line.split()
+
+    if len(tokens) >= 2:
+        name_chars = []
+
+        for token in tokens:
+            if re.fullmatch(r"[가-힣]", token):
+                name_chars.append(token)
+                continue
+            break
+
+        if 2 <= len(name_chars) <= 4:
+            raw_name = " ".join(name_chars)
+            name = "".join(name_chars)
+            start = text.find(raw_name)
+
+            return [
+                PIIMatch(
+                    type="name",
+                    value=name,
+                    start=start,
+                    end=start + len(raw_name),
+                )
+            ]
+
+    # 일반 케이스: 최도현 - DevOps, 김하린 - AI
+    patterns = [
+        r"^([가-힣]{2,4})\s*[-|/]",
+        r"^([가-힣]{2,4})\s+[A-Za-z]",
+    ]
+
+    for pattern in patterns:
+        m = re.search(pattern, first_line)
+        if m:
+            raw_name = m.group(1)
+            start = text.find(raw_name)
+
+            return [
+                PIIMatch(
+                    type="name",
+                    value=raw_name,
+                    start=start,
+                    end=start + len(raw_name),
+                )
+            ]
+
+    return []
+
+def normalize_name(value: str) -> str | None:
+    if not value:
+        return None
+
+    # 공백 제거: "김 지 원" -> "김지원"
+    value = re.sub(r"\s+", "", value)
+
+    # 한글만 추출
+    m = re.search(r"[가-힣]{2,4}", value)
+    if not m:
+        return None
+
+    return m.group()
+
+
 def get_pii_value(matches: list[PIIMatch], pii_type: str):
     values = [
         m.value.strip()
@@ -60,14 +131,13 @@ def get_pii_value(matches: list[PIIMatch], pii_type: str):
     if not values:
         return None
 
-    # 너무 긴 값 방지
     if pii_type == "name":
-        values = [
-            v for v in values
-            if re.fullmatch(r"[가-힣]{2,4}", v)
-        ]
-
-    return values[0] if values else None
+        for v in values:
+            name = re.sub(r"\s+", "", v)
+            if re.fullmatch(r"[가-힣]{2,4}", name):
+                return name
+        return None
+    return values[0]
 
 # --------------------------------------------------
 # 1차: 정규식 + 이력서 라벨 룰
@@ -80,9 +150,9 @@ REGEX_RULES = {
 }
 
 FORMAT_RULES = {
-    "name": r"(?:이름|성명|지원자명)\s*[:：]?\s*([가-힣]{2,4})",
-    "birth": r"(?:생년월일|생일|출생)\s*[:：]?\s*([\d.\-]{6,10})",
-    "address": r"(?:주소|거주지)\s*[:：]?\s*([^\n]+)",
+    "name": r"^(?:이름|성명|지원자명)\s*[:：]\s*([가-힣]{2,4})\s*$",
+    "birth": r"^(?:생년월일|생일|출생)\s*[:：]\s*([\d.\-]{6,10})\s*$",
+    "address": r"^(?:주소|거주지)\s*[:：]\s*([^\n]+)\s*$",
 }
 
 LABEL_KEYWORDS = {
@@ -155,6 +225,10 @@ def extract_by_label_lines(text: str) -> list[PIIMatch]:
             if not any(kw.lower() in line.lower() for kw in keywords):
                 continue
 
+            if pii_type == "name" and line not in ["이름", "성명", "지원자명"]:
+                continue
+    
+
             if ":" in line or "：" in line:
                 break
 
@@ -219,7 +293,7 @@ def extract_stage1(text: str) -> list[PIIMatch]:
             )
 
     for pii_type, pattern in FORMAT_RULES.items():
-        for m in re.finditer(pattern, text):
+        for m in re.finditer(pattern, text, re.MULTILINE):
             _add_if_no_overlap(
                 matches,
                 PIIMatch(
@@ -231,6 +305,9 @@ def extract_stage1(text: str) -> list[PIIMatch]:
             )
 
     for m in extract_by_label_lines(text):
+        _add_if_no_overlap(matches, m)
+
+    for m in extract_name_from_header(text):
         _add_if_no_overlap(matches, m)
 
     for m in extract_known_name_mentions(text, matches):
