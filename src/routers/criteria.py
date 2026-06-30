@@ -12,6 +12,39 @@ router = APIRouter(
     tags=["criteria"]
 )
 
+# 가중치 합 100 검증 가드 로직
+def normalize_weights(results: list[dict]) -> list[dict]:
+    """LLM이 만든 weight 합이 100이 아닐 경우 비례 보정해서 100으로 맞춘다."""
+    total = sum(item["weight"] for item in results)
+
+    if total <= 0:
+        # 비정상 응답 방어: 균등 분배로 폴백
+        n = len(results)
+        base = 100 // n
+        for i, item in enumerate(results):
+            item["weight"] = base
+        results[-1]["weight"] += 100 - base * n
+        return results
+
+    if total == 100:
+        return results
+
+    # 비례 보정 (소수점 버림)
+    running_total = 0
+    for item in results:
+        scaled = round(item["weight"] * 100 / total)
+        item["weight"] = scaled
+        running_total += scaled
+
+    # 반올림 오차 보정: 가장 weight가 큰 항목에 나머지를 몰아줌
+    diff = 100 - running_total
+    if diff != 0:
+        max_item = max(results, key=lambda x: x["weight"])
+        max_item["weight"] += diff
+
+    return results
+
+
 @router.post("/job-posting/{job_posting_id}/criteria")
 def create_criteria(job_posting_id: int):
     response = (
@@ -75,6 +108,8 @@ OUTPUT(JSON):
         "job_posting": response.data
     })
 
+    results = normalize_weights(results)  # ← 가드 로직 추가
+    
     category_map = {
         "자격조건": "자격 조건",
         "자격 조건": "자격 조건",
