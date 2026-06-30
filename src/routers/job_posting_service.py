@@ -69,6 +69,7 @@ def scrape_job_posting(url):
         "input_type": "url",
         "source_url": url,
         "raw_content": None,
+        "image_content": None,
         "conts_summary": None
         }
 
@@ -150,7 +151,15 @@ def scrape_job_posting(url):
                 if src.startswith("//"):
                     src = "https:" + src
                 data.append(src)
-        result["raw_content"] = data
+
+        if isinstance(data, list):
+            # 본문이 텍스트가 아니라 이미지로만 구성된 경우: image_content에 URL 목록 저장.
+            # raw_content(추출 텍스트)는 이후 OCR 단계(format_job_posting)에서 채워짐.
+            result["image_content"] = data
+            result["raw_content"] = None
+        else:
+            result["raw_content"] = data
+            result["image_content"] = None
 
     except Exception as e:
         print(f"[view-detail 실패] {rec_idx}: {e}")
