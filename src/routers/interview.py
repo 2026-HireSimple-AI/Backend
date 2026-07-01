@@ -27,6 +27,7 @@ class BulkGenerateRequest(BaseModel):
     applicant_ids: List[int]
     question_count: int = 5
     question_types: List[str] = ["행동", "역량", "우려검증", "기술검증", "기타"]
+    force: bool = False  # True이면 기존 질문 삭제 후 재생성
 
 
 class UpdateQuestionRequest(BaseModel):
@@ -163,7 +164,9 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
     system_prompt = _build_system_prompt()
     user_prompt = f"""공고: {job_info}
 이력서: {resume_text}
-요청 유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성. 기타 유형은 위 4가지에 모두 해당하지 않을 때만 사용."""
+요청 유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성. 반드시 {body.question_count}개를 모두 포함해야 하며 더 적거나 많으면 안 됨. 기타 유형은 위 4가지에 모두 해당하지 않을 때만 사용."""
+
+    max_tokens = max(1500, body.question_count * 120)
 
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
@@ -180,7 +183,7 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
                         {"role": "user", "content": user_prompt}
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 1500
+                    "max_tokens": max_tokens
                 }
             )
 
@@ -305,24 +308,27 @@ async def bulk_generate_interview_questions(body: BulkGenerateRequest):
     async def _generate_one(applicant_id: int) -> dict:
         loop = asyncio.get_event_loop()
 
-        # 이미 질문 존재 시 스킵
+        # 이미 질문 존재 시 처리
         def _check_existing():
             return supabase.table("interview_questions")\
                 .select("id").eq("applicant_id", applicant_id).limit(1).execute()
 
         existing = await loop.run_in_executor(None, _check_existing)
         if existing.data:
-            return {"applicant_id": applicant_id, "status": "skipped"}
+            if not body.force:
+                return {"applicant_id": applicant_id, "status": "skipped"}
+            # force=True 이면 기존 질문 전부 삭제
+            def _delete_existing():
+                return supabase.table("interview_questions")\
+                    .delete().eq("applicant_id", applicant_id).execute()
+            await loop.run_in_executor(None, _delete_existing)
 
-        # 지원자 + 이력서 조회
-        def _get_applicant():
-            return supabase.table("applicants").select("*").eq("id", applicant_id).execute()
-        def _get_resume_files():
-            return supabase.table("resume_files").select("extracted_text").eq("applicant_id", applicant_id).execute()
-
-        applicant_res, rf_res = await asyncio.gather(
-            loop.run_in_executor(None, _get_applicant),
-            loop.run_in_executor(None, _get_resume_files),
+        # 지원자 + 이력서 조회 (HTTP/2 커넥션 충돌 방지를 위해 순차 실행)
+        applicant_res = await loop.run_in_executor(
+            None, lambda: supabase.table("applicants").select("*").eq("id", applicant_id).execute()
+        )
+        rf_res = await loop.run_in_executor(
+            None, lambda: supabase.table("resume_files").select("extracted_text").eq("applicant_id", applicant_id).execute()
         )
 
         if not applicant_res.data:
@@ -331,19 +337,15 @@ async def bulk_generate_interview_questions(body: BulkGenerateRequest):
         applicant = applicant_res.data[0]
         job_posting_id = applicant.get("job_posting_id")
 
-        def _get_job():
-            if not job_posting_id:
-                return None
-            return supabase.table("job_postings").select("title, raw_content").eq("id", job_posting_id).execute()
-        def _get_resumes():
-            if not job_posting_id:
-                return None
-            return supabase.table("resumes").select("resume_text").eq("job_posting_id", job_posting_id).execute()
-
-        job_res, resume_res = await asyncio.gather(
-            loop.run_in_executor(None, _get_job),
-            loop.run_in_executor(None, _get_resumes),
-        )
+        job_res = None
+        resume_res = None
+        if job_posting_id:
+            job_res = await loop.run_in_executor(
+                None, lambda: supabase.table("job_postings").select("title, raw_content").eq("id", job_posting_id).execute()
+            )
+            resume_res = await loop.run_in_executor(
+                None, lambda: supabase.table("resumes").select("resume_text").eq("job_posting_id", job_posting_id).execute()
+            )
 
         job_info = "채용 공고 정보 없음"
         if job_res and job_res.data:
@@ -369,7 +371,9 @@ async def bulk_generate_interview_questions(body: BulkGenerateRequest):
         system_prompt = _build_system_prompt()
         user_prompt = f"""공고: {job_info}
 이력서: {resume_text}
-요청 유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성. 기타 유형은 위 4가지에 모두 해당하지 않을 때만 사용."""
+요청 유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성. 반드시 {body.question_count}개를 모두 포함해야 하며 더 적거나 많으면 안 됨. 기타 유형은 위 4가지에 모두 해당하지 않을 때만 사용."""
+
+        max_tokens = max(1500, body.question_count * 120)
 
         try:
             async with httpx.AsyncClient(timeout=90.0) as client:
@@ -383,7 +387,7 @@ async def bulk_generate_interview_questions(body: BulkGenerateRequest):
                             {"role": "user", "content": user_prompt}
                         ],
                         "temperature": 0.3,
-                        "max_tokens": 1500
+                        "max_tokens": max_tokens
                     }
                 )
 
