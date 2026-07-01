@@ -164,7 +164,9 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
     system_prompt = _build_system_prompt()
     user_prompt = f"""공고: {job_info}
 이력서: {resume_text}
-요청 유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성. 기타 유형은 위 4가지에 모두 해당하지 않을 때만 사용."""
+요청 유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성. 반드시 {body.question_count}개를 모두 포함해야 하며 더 적거나 많으면 안 됨. 기타 유형은 위 4가지에 모두 해당하지 않을 때만 사용."""
+
+    max_tokens = max(1500, body.question_count * 120)
 
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:
@@ -181,7 +183,7 @@ async def generate_interview_questions(applicant_id: int, body: GenerateRequest)
                         {"role": "user", "content": user_prompt}
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 1500
+                    "max_tokens": max_tokens
                 }
             )
 
@@ -369,7 +371,9 @@ async def bulk_generate_interview_questions(body: BulkGenerateRequest):
         system_prompt = _build_system_prompt()
         user_prompt = f"""공고: {job_info}
 이력서: {resume_text}
-요청 유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성. 기타 유형은 위 4가지에 모두 해당하지 않을 때만 사용."""
+요청 유형[{question_types_str}]에서 골고루 정확히 {body.question_count}개 생성. 반드시 {body.question_count}개를 모두 포함해야 하며 더 적거나 많으면 안 됨. 기타 유형은 위 4가지에 모두 해당하지 않을 때만 사용."""
+
+        max_tokens = max(1500, body.question_count * 120)
 
         try:
             async with httpx.AsyncClient(timeout=90.0) as client:
@@ -383,7 +387,7 @@ async def bulk_generate_interview_questions(body: BulkGenerateRequest):
                             {"role": "user", "content": user_prompt}
                         ],
                         "temperature": 0.3,
-                        "max_tokens": 1500
+                        "max_tokens": max_tokens
                     }
                 )
 
