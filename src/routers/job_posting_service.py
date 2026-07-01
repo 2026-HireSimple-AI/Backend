@@ -95,7 +95,7 @@ def scrape_job_posting(url):
             },
         )
         res.raise_for_status()
-        soup = BeautifulSoup(res.text, "html.parser")
+        soup = BeautifulSoup(res.content, "html.parser", from_encoding="utf-8")
         title = soup.select("h1.tit_job")[0].text.strip()
         result["title"] = title
         # cont = soup.select_one("div.cont")
@@ -126,26 +126,35 @@ def scrape_job_posting(url):
     try:
         res = session.get(detail_url, headers={"referer": url})
         res.raise_for_status()
-        res.encoding = res.apparent_encoding
-        detail_soup = BeautifulSoup(res.text, "html.parser")
+        detail_soup = BeautifulSoup(res.content, "html.parser", from_encoding="utf-8")
 
-        contents = detail_soup.select_one("div.user_content")
-        text1 = contents.select_one("div.job-content") if contents else None
-        text2 = contents.select_one("div.content") if contents else None
-        text3_locator = detail_soup.select_one("body > div > div > div:nth-child(2)")
-        text3_text = text3_locator.get_text(strip=True) if text3_locator else ""
+        # 가능한 텍스트 컨테이너 순서대로 시도
+        SELECTORS = [
+            "div.user_content div.job-content",
+            "div.user_content div.content",
+            "div.user_content",
+            "div#job_detail_description",
+            "div.wrap_jd_cont",
+            "section.jv_cont",
+            "div.jv_cont",
+        ]
+        data = ""
+        contents = None
+        for sel in SELECTORS:
+            node = detail_soup.select_one(sel)
+            if node:
+                text = node.get_text(separator="\n", strip=True).replace("\xa0", " ")
+                if len(text) > len(data):
+                    data = text
+                    contents = node
 
-        if text1:
-            data = text1.get_text(strip=True).replace("\xa0", " ")
-        elif text2:
-            data = text2.get_text(strip=True).replace("\xa0", " ")
-        elif text3_text:
-            data = text3_text.replace("\xa0", " ")
-        else:
-            images = contents.select("img") if contents else []
-            data = []
+        # 텍스트가 충분하지 않으면 이미지 URL 수집
+        if len(data) < 100:
+            img_container = detail_soup.select_one("div.user_content") or detail_soup.body
+            images = img_container.select("img") if img_container else []
+            img_urls = []
             for img in images:
-                src = img.get("src")
+                src = img.get("src") or img.get("data-src")
                 if not src:
                     continue
                 if src.startswith("//"):

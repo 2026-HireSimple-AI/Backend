@@ -130,7 +130,6 @@ wheel==0.47.0
 xxhash==3.7.0
 yarl==1.24.2
 zstandard==0.25.0
-#------------------------------------------------
 playwright==1.60.0
 langchain-community
 pypdf
@@ -138,5 +137,6 @@ torch
 docx2txt
 transformers==4.57.1
 python-multipart
-# -----------------------
 beautifulsoup4
+# -----------------------
+reportlab

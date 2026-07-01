@@ -77,8 +77,6 @@ async def get_applicant_detail(applicant_id: int):
 
     criteria_map = {c["id"]: c for c in criteria_list.data}
 
-    print("criteria_map:", criteria_map)
-    print("detail_scores:", detail_scores.data)
 
     # # type_criteria 조회
     # type_criteria_list = supabase.table("type_criteria")\
