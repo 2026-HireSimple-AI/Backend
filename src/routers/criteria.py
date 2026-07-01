@@ -44,7 +44,6 @@ def normalize_weights(results: list[dict]) -> list[dict]:
 
     return results
 
-
 @router.post("/job-posting/{job_posting_id}/criteria")
 def create_criteria(job_posting_id: int):
     response = (
@@ -96,7 +95,7 @@ OUTPUT(JSON):
 - **weight 전체 합은 반드시 100**
 - JSON 외의 설명 문장은 출력하지 마
 - 자격조건에는 학력과 경력은 평가 기준으로 만들지마.
-- 그리고 꼭 "자격조건", "주요업무", "우대사항"이 하나씩은 있어야함.
+- **꼭 "자격조건", "주요업무", "우대사항"이 하나씩은 있어야함.**
 """
     )
 
@@ -108,7 +107,9 @@ OUTPUT(JSON):
         "job_posting": response.data
     })
 
-    results = normalize_weights(results)  # ← 가드 로직 추가
+    print("before normalize:", sum(item["weight"] for item in results))
+    results = normalize_weights(results)
+    print("after normalize:", sum(item["weight"] for item in results))
     
     category_map = {
         "자격조건": "자격 조건",
