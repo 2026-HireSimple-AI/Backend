@@ -12,6 +12,38 @@ router = APIRouter(
     tags=["criteria"]
 )
 
+# 가중치 합 100 검증 가드 로직
+def normalize_weights(results: list[dict]) -> list[dict]:
+    """LLM이 만든 weight 합이 100이 아닐 경우 비례 보정해서 100으로 맞춘다."""
+    total = sum(item["weight"] for item in results)
+
+    if total <= 0:
+        # 비정상 응답 방어: 균등 분배로 폴백
+        n = len(results)
+        base = 100 // n
+        for i, item in enumerate(results):
+            item["weight"] = base
+        results[-1]["weight"] += 100 - base * n
+        return results
+
+    if total == 100:
+        return results
+
+    # 비례 보정 (소수점 버림)
+    running_total = 0
+    for item in results:
+        scaled = round(item["weight"] * 100 / total)
+        item["weight"] = scaled
+        running_total += scaled
+
+    # 반올림 오차 보정: 가장 weight가 큰 항목에 나머지를 몰아줌
+    diff = 100 - running_total
+    if diff != 0:
+        max_item = max(results, key=lambda x: x["weight"])
+        max_item["weight"] += diff
+
+    return results
+
 @router.post("/job-posting/{job_posting_id}/criteria")
 def create_criteria(job_posting_id: int):
     response = (
@@ -60,9 +92,10 @@ OUTPUT(JSON):
 - category는 반드시 "자격조건", "주요업무", "우대사항" 중 하나
 - 한 category 안에 여러 개의 평가 기준이 들어갈 수 있음
 - description은 구체적인 평가 기준으로 작성
-- weight 전체 합은 반드시 100
+- **weight 전체 합은 반드시 100**
 - JSON 외의 설명 문장은 출력하지 마
 - 자격조건에는 학력과 경력은 평가 기준으로 만들지마.
+- **꼭 "자격조건", "주요업무", "우대사항"이 하나씩은 있어야함.**
 """
     )
 
@@ -74,6 +107,10 @@ OUTPUT(JSON):
         "job_posting": response.data
     })
 
+    print("before normalize:", sum(item["weight"] for item in results))
+    results = normalize_weights(results)
+    print("after normalize:", sum(item["weight"] for item in results))
+    
     category_map = {
         "자격조건": "자격 조건",
         "자격 조건": "자격 조건",
