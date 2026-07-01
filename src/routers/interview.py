@@ -321,15 +321,12 @@ async def bulk_generate_interview_questions(body: BulkGenerateRequest):
                     .delete().eq("applicant_id", applicant_id).execute()
             await loop.run_in_executor(None, _delete_existing)
 
-        # 지원자 + 이력서 조회
-        def _get_applicant():
-            return supabase.table("applicants").select("*").eq("id", applicant_id).execute()
-        def _get_resume_files():
-            return supabase.table("resume_files").select("extracted_text").eq("applicant_id", applicant_id).execute()
-
-        applicant_res, rf_res = await asyncio.gather(
-            loop.run_in_executor(None, _get_applicant),
-            loop.run_in_executor(None, _get_resume_files),
+        # 지원자 + 이력서 조회 (HTTP/2 커넥션 충돌 방지를 위해 순차 실행)
+        applicant_res = await loop.run_in_executor(
+            None, lambda: supabase.table("applicants").select("*").eq("id", applicant_id).execute()
+        )
+        rf_res = await loop.run_in_executor(
+            None, lambda: supabase.table("resume_files").select("extracted_text").eq("applicant_id", applicant_id).execute()
         )
 
         if not applicant_res.data:
@@ -338,19 +335,15 @@ async def bulk_generate_interview_questions(body: BulkGenerateRequest):
         applicant = applicant_res.data[0]
         job_posting_id = applicant.get("job_posting_id")
 
-        def _get_job():
-            if not job_posting_id:
-                return None
-            return supabase.table("job_postings").select("title, raw_content").eq("id", job_posting_id).execute()
-        def _get_resumes():
-            if not job_posting_id:
-                return None
-            return supabase.table("resumes").select("resume_text").eq("job_posting_id", job_posting_id).execute()
-
-        job_res, resume_res = await asyncio.gather(
-            loop.run_in_executor(None, _get_job),
-            loop.run_in_executor(None, _get_resumes),
-        )
+        job_res = None
+        resume_res = None
+        if job_posting_id:
+            job_res = await loop.run_in_executor(
+                None, lambda: supabase.table("job_postings").select("title, raw_content").eq("id", job_posting_id).execute()
+            )
+            resume_res = await loop.run_in_executor(
+                None, lambda: supabase.table("resumes").select("resume_text").eq("job_posting_id", job_posting_id).execute()
+            )
 
         job_info = "채용 공고 정보 없음"
         if job_res and job_res.data:
