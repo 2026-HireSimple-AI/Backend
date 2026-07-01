@@ -78,27 +78,6 @@ def normalize_content(value: Any) -> list[str]:
     return [str(value)]
 
 
-# def to_front_formatted_response(job_posting_id: int, formatted_posting: dict, title: str) -> dict:
-#     return {
-#         "job_posting_id": job_posting_id,
-#         "title": title,
-#         "formatted_posting": [
-#             {
-#                 "category": "자격 조건",
-#                 "content": normalize_content(formatted_posting.get("requirement")),
-#             },
-#             {
-#                 "category": "주요 업무",
-#                 "content": normalize_content(formatted_posting.get("task")),
-#             },
-#             {
-#                 "category": "우대 사항",
-#                 "content": normalize_content(formatted_posting.get("preference")),
-#             },
-#         ],
-#         "skills_stack": formatted_posting.get("skill_stack", []),
-#     }
-
 def to_front_formatted_response(job_posting_id: int, formatted_posting: dict, title: str) -> dict:
     return {
         "job_posting_id": job_posting_id,
@@ -124,14 +103,34 @@ def to_front_formatted_response(job_posting_id: int, formatted_posting: dict, ti
     }
 
 
-def raw_content_to_posting_text(raw_content: Any) -> str:
-    if isinstance(raw_content, str) and raw_content.startswith("http"):
-        return extract_job_posting_text(raw_content, is_url=True)
+def get_posting_text(job_posting_id: int, posting: dict) -> str:
+    """
+    posting.raw_content가 이미 채워져 있으면 그대로 반환.
+    raw_content가 비어 있고 image_content(이미지 URL 목록)만 있으면
+    그때 OCR(extract_job_posting_text)을 돌려서 결과를 DB의 raw_content에
+    캐싱해두고 반환한다. (다음 포맷팅 요청부터는 재OCR하지 않도록)
+    """
+    raw_content = posting.get("raw_content")
+    if raw_content:
+        return raw_content
 
-    if isinstance(raw_content, list) and raw_content:
-        return extract_job_posting_text(raw_content, is_url=True)
+    image_content = posting.get("image_content")
+    if not image_content:
+        raise HTTPException(
+            status_code=400,
+            detail="채용공고 본문(raw_content/image_content)이 비어 있습니다.",
+        )
 
-    return raw_content or ""
+    extracted_text = extract_job_posting_text(image_content, is_url=True)
+
+    try:
+        supabase.table("job_postings").update(
+            {"raw_content": extracted_text}
+        ).eq("id", job_posting_id).execute()
+    except Exception as e:
+        print(f"raw_content 캐싱 실패 (job_posting_id={job_posting_id}):", e)
+
+    return extracted_text
 
 
 REQUIRED_FIELDS = ["requirement", "skill_stack", "task", "preference"]
@@ -157,7 +156,7 @@ def upload_job_posting(req: UrlRequest, authorization: Optional[str] = Header(No
     if not result.get("title"):
         raise HTTPException(status_code=400, detail="채용공고 제목을 가져오지 못했습니다.")
 
-    if not result.get("raw_content"):
+    if not result.get("raw_content") and not result.get("image_content"):
         raise HTTPException(status_code=400, detail="채용공고 본문을 가져오지 못했습니다.")
 
     # 이미지 URL 리스트인 경우 업로드 시점에 즉시 텍스트 추출 (URL 만료 방지)
@@ -178,7 +177,8 @@ def upload_job_posting(req: UrlRequest, authorization: Optional[str] = Header(No
             "title": result["title"],
             "input_type": result["input_type"],
             "source_url": result["source_url"],
-            "raw_content": raw_content,
+            "raw_content": result["raw_content"],
+            "image_content": result["image_content"],
             "conts_summary": result["conts_summary"],
         })
         .execute()
@@ -247,39 +247,9 @@ def format_job_posting(job_posting_id: int):
 
     title = posting["title"]
     summary = json_to_str(posting.get("conts_summary"))
-    raw_content = posting.get("raw_content")
-    source_url = posting.get("source_url", "")
+    posting_text = get_posting_text(job_posting_id, posting)
 
-    # 1) DB에 저장된 raw_content로 텍스트 추출
-    posting_text = ""
-    try:
-        posting_text = raw_content_to_posting_text(raw_content)
-    except Exception as e:
-        print(f"[format] raw_content 추출 실패: {e}", file=sys.stderr)
-
-    print(f"[format] raw_content 타입={type(raw_content).__name__}, posting_text 길이={len(posting_text)}", file=sys.stderr)
-
-    # 2) 텍스트가 짧거나 없으면 source_url로 재스크래핑
-    if len(posting_text) < 200 and source_url:
-        print(f"[format] 텍스트 부족, source_url 재스크래핑: {source_url}", file=sys.stderr)
-        try:
-            fresh = scrape_job_posting(source_url)
-            fresh_raw = fresh.get("raw_content")
-            if fresh_raw:
-                fresh_text = raw_content_to_posting_text(fresh_raw)
-                if len(fresh_text) > len(posting_text):
-                    posting_text = fresh_text
-                    print(f"[format] 재스크래핑 성공: {len(posting_text)}자", file=sys.stderr)
-        except Exception as e:
-            print(f"[format] 재스크래핑 실패: {e}", file=sys.stderr)
-
-    # 3) conts_summary와 합쳐서 LLM에 전달
-    if summary:
-        posting_text = f"{summary}\n\n{posting_text}" if posting_text else summary
-
-    print(f"[format] LLM 입력 텍스트 길이={len(posting_text)}", file=sys.stderr)
-
-    max_retry = 3  # 텍스트가 있으면 3회면 충분
+    max_retry = 10
     formatted_posting = None
 
     for i in range(max_retry):
