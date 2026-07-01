@@ -46,6 +46,127 @@ async def get_applicants(job_posting_id: int):
         "data": sorted_data
     }
 
+@router.get("/job-postings/{job_posting_id}/applicants-detail")
+async def get_all_applicants_detail(job_posting_id: int):
+    """채용 공고의 모든 지원자 상세 정보 한 번에 조회 (LLM 제와)"""
+    
+    # 1. 이 공고의 모든 지원자 조회
+    applicants_res = supabase.table("applicants")\
+        .select("*")\
+        .eq("job_posting_id", job_posting_id)\
+        .execute()
+    
+    if not applicants_res.data:
+        raise HTTPException(status_code=404, detail="지원자가 없습니다.")
+
+    # 2. applicant_id 목록 추출 (다음 조회들에서 사용)
+    applicant_ids = [a["id"] for a in applicants_res.data]
+
+    # 3. 모든 지원자 점수 한 번에 조회
+    scores_res = supabase.table("applicant_scores")\
+        .select("*")\
+        .eq("job_posting_id", job_posting_id)\
+        .execute()
+
+    # 4. 모든 지원자 세부 점수 한 번에 조회
+    detail_scores_res = supabase.table("detail_scores")\
+        .select("*")\
+        .in_("applicant_id", applicant_ids)\
+        .execute()
+
+    # 5. criteria 테이블 조회 (세부 점수 변환용)
+    criteria_res = supabase.table("criteria")\
+        .select("*")\
+        .execute()
+    criteria_map = {c["id"]: c for c in criteria_res.data}
+
+    # 6. 기술 스택 조회
+    skills_res = supabase.table("skills_stack")\
+        .select("skill_name")\
+        .eq("job_posting_id", job_posting_id)\
+        .execute()
+    skill_names = [s["skill_name"] for s in skills_res.data]
+
+    # 7. 이력서 텍스트 조회 (matched_skills 계산용)
+    resumes_res = supabase.table("resume_files")\
+        .select("applicant_id, extracted_text")\
+        .in_("applicant_id", applicant_ids)\
+        .execute()
+    resume_map = {r["applicant_id"]: r["extracted_text"] for r in resumes_res.data}
+
+    # 8. 점수를 applicant_id 기준으로 매핑 (빠른 조회용 딕셔너리)
+    score_map = {s["applicant_id"]: s for s in scores_res.data}
+
+    # 9. 세부 점수를 applicant_id 기준으로 그룹핑
+    detail_map: dict = {}
+    for ds in detail_scores_res.data:
+        aid = ds["applicant_id"]
+        if aid not in detail_map:
+            detail_map[aid] = []
+        detail_map[aid].append(ds)
+
+    # 10. 각 지원자별로 데이터 조합
+    result = []
+    for applicant in applicants_res.data:
+        aid = applicant["id"]
+        score_data = score_map.get(aid, {})
+        raw_detail_scores = detail_map.get(aid, [])
+        resume_text = resume_map.get(aid, "") or ""
+
+        # matched_skills 계산 (텍스트 매칭 + 중복 제거)
+        matched_skills = list(dict.fromkeys([
+            skill for skill in skill_names
+            if skill.lower() in resume_text.lower()
+        ]))
+
+        # 세부 점수 변환
+        converted_detail_scores = []
+        for ds in raw_detail_scores:
+            criteria = criteria_map.get(ds.get("criteria_id"), {})
+            score = ds.get("score", 0)
+            type_weight = criteria.get("type_weight", 0)
+
+            if not criteria.get("details") or type_weight == 0:
+                continue
+
+            converted_detail_scores.append({
+                "criterion_type": criteria.get("criterion_type", ""),
+                "type_weight": type_weight,
+                "detail": criteria.get("details", ""),
+                "score": score,
+                "weight": type_weight,
+                "weighted_score": round(score * type_weight / 100, 1)
+            })
+
+        result.append({
+            "id": aid,
+            "masked_code": applicant["masked_code"],
+            "real_name": applicant.get("real_name", ""),
+            "career": f"경력 {applicant.get('career')}" if applicant.get('career') else "신입",
+            "score": {
+                "total_score": score_data.get("total_score", 0),
+                "requirement_score": score_data.get("requirement_score", 0),
+                "skill_score": score_data.get("skill_score", 0),
+                "task_score": score_data.get("task_score", 0),
+                "preference_score": score_data.get("preference_score", 0),
+            },
+            "detail_scores": converted_detail_scores,
+            "matched_skills": matched_skills,
+            "resume_summary": {
+                "career_summary": "",
+                "project_summary": "",
+                "skill_summary": ""
+            }
+        })
+
+    # total_score 기준 내림차순 정렬
+    result.sort(key=lambda x: x["score"]["total_score"], reverse=True)
+
+    return {
+        "success": True,
+        "data": result
+    }
+
 @router.get("/applicants/{applicant_id}")
 async def get_applicant_detail(applicant_id: int):
     """지원자 상세 정보 + 점수 조회"""
@@ -80,20 +201,6 @@ async def get_applicant_detail(applicant_id: int):
     print("criteria_map:", criteria_map)
     print("detail_scores:", detail_scores.data)
 
-    # # type_criteria 조회
-    # type_criteria_list = supabase.table("type_criteria")\
-    #     .select("*")\
-    #     .execute()
-
-    # # detail_criteria 조회
-    # detail_criteria_list = supabase.table("detail_criteria")\
-    #     .select("*")\
-    #     .execute()
-
-    # # 딕셔너리로 변환 (빠른 조회용)
-    # type_criteria_map = {tc["id"]: tc for tc in type_criteria_list.data}
-    # detail_criteria_map = {dc["id"]: dc for dc in detail_criteria_list.data}
-
     # 세부 점수 변환
     converted_detail_scores = []
     for ds in detail_scores.data:
@@ -112,26 +219,6 @@ async def get_applicant_detail(applicant_id: int):
             "weight": type_weight,
             "weighted_score": round(score * type_weight / 100, 1)
     })
-    # 프론트 구조에 맞게 변환
-    # converted_detail_scores = []
-    # for ds in detail_scores.data:
-    #     type_criteria = type_criteria_map.get(ds.get("type_criteria_id"), {})
-    #     detail_criteria = detail_criteria_map.get(ds.get("detail_criteria_id"), {})
-    #     score = ds.get("score", 0)
-    #     weight = detail_criteria.get("weight", 0)
-
-    #     # detail이 없거나 weight가 0이면 제외
-    #     if not detail_criteria.get("detail") or weight == 0:
-    #         continue
-
-    #     converted_detail_scores.append({
-    #         "criterion_type": type_criteria.get("criterion_type", ""),
-    #         "type_weight": type_criteria.get("type_weight", 0),
-    #         "detail": detail_criteria.get("detail", ""),
-    #         "score": score,
-    #         "weight": weight,
-    #         "weighted_score": round(score * weight / 100, 1)
-    #     })
     
     # 기술 스택 조회
     skills = supabase.table("skills_stack")\
