@@ -27,6 +27,7 @@ class BulkGenerateRequest(BaseModel):
     applicant_ids: List[int]
     question_count: int = 5
     question_types: List[str] = ["행동", "역량", "우려검증", "기술검증", "기타"]
+    force: bool = False  # True이면 기존 질문 삭제 후 재생성
 
 
 class UpdateQuestionRequest(BaseModel):
@@ -305,14 +306,20 @@ async def bulk_generate_interview_questions(body: BulkGenerateRequest):
     async def _generate_one(applicant_id: int) -> dict:
         loop = asyncio.get_event_loop()
 
-        # 이미 질문 존재 시 스킵
+        # 이미 질문 존재 시 처리
         def _check_existing():
             return supabase.table("interview_questions")\
                 .select("id").eq("applicant_id", applicant_id).limit(1).execute()
 
         existing = await loop.run_in_executor(None, _check_existing)
         if existing.data:
-            return {"applicant_id": applicant_id, "status": "skipped"}
+            if not body.force:
+                return {"applicant_id": applicant_id, "status": "skipped"}
+            # force=True 이면 기존 질문 전부 삭제
+            def _delete_existing():
+                return supabase.table("interview_questions")\
+                    .delete().eq("applicant_id", applicant_id).execute()
+            await loop.run_in_executor(None, _delete_existing)
 
         # 지원자 + 이력서 조회
         def _get_applicant():
