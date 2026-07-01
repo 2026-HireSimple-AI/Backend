@@ -2,6 +2,15 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 import uuid
 from database import supabase
 
+import io
+from pypdf import PdfWriter, PdfReader
+from fastapi.responses import StreamingResponse
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from pathlib import Path
+
 from routers.resume_service import process_resume_batch, extract_resume_text
 
 router = APIRouter(
@@ -303,3 +312,115 @@ async def upload_resumes(
             "files": files_response,
         }
     }
+
+# 한글 폰트 등록 (서버에 폰트 파일 경로 필요, 예: NanumGothic)
+BASE_DIR = Path(__file__).parent.parent
+FONT_PATH = str(BASE_DIR / "fonts" / "NanumGothic.ttf")
+
+
+def text_to_pdf_bytes(text: str, title: str) -> bytes:
+    if "NanumGothic" not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(TTFont("NanumGothic", FONT_PATH))
+    
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    c.setFont("NanumGothic", 14)
+    c.drawString(40, height - 50, title)
+
+    c.setFont("NanumGothic", 10)
+    y = height - 90
+    line_height = 14
+    max_width = width - 80
+
+    for raw_line in text.split("\n"):
+        # 긴 줄 wrap 처리
+        line = raw_line
+        while line:
+            # 대략적인 글자수 기준 wrap (한글 폰트 기준 보정 필요)
+            cut = 0
+            for i in range(1, len(line) + 1):
+                if pdfmetrics.stringWidth(line[:i], "NanumGothic", 10) > max_width:
+                    break
+                cut = i
+            chunk = line[:cut] if cut else line
+            c.drawString(40, y, chunk)
+            line = line[len(chunk):]
+            y -= line_height
+            if y < 50:
+                c.showPage()
+                c.setFont("NanumGothic", 10)
+                y = height - 50
+
+        y -= line_height * 0.3  # 빈 줄 간격
+
+    c.save()
+    buffer.seek(0)
+    return buffer.read()
+
+
+@router.get("/job-posting/{job_posting_id}/resumes/masked-download")
+def download_masked_resumes(job_posting_id: int):
+    applicants_response = (
+        supabase.table("applicants")
+        .select("id")
+        .eq("job_posting_id", job_posting_id)
+        .execute()
+    )
+    applicant_ids = [a["id"] for a in applicants_response.data]
+    print(f"[DEBUG] job_posting_id: {job_posting_id}")
+    print(f"[DEBUG] applicant_ids: {applicant_ids}")  # ← 몇 개 나오는지
+
+
+    if not applicant_ids:
+        raise HTTPException(status_code=404, detail="해당 공고에 등록된 지원자가 없습니다.")
+
+    response = (
+        supabase.table("resume_files")
+        .select("id, original_filename, masked_text, processing_status")
+        .in_("applicant_id", applicant_ids)
+        .in_("processing_status", ["masked", "uploaded"])
+        .execute()
+    )
+    print(f"[DEBUG] resume_files count: {len(response.data)}")  # ← 몇 개 잡히는지
+    rows = response.data
+    print(f"[DEBUG] rows count: {len(rows)}")
+    for row in rows:
+        print(f"[DEBUG] {row['original_filename']} | status: {row['processing_status']} | masked_text 길이: {len(row.get('masked_text') or '')}")
+    
+    if not rows:
+        raise HTTPException(status_code=404, detail="마스킹 완료된 이력서가 없습니다.")
+
+    # 개별 PDF를 하나로 합치기
+    writer = PdfWriter()
+
+    for row in rows:
+        if not row.get("masked_text"):
+            continue
+        try:
+            pdf_bytes = text_to_pdf_bytes(row["masked_text"], row["original_filename"].rsplit(".", 1)[0])
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            for page in reader.pages:
+                writer.add_page(page)
+        except Exception as e:
+            print(f"[PDF 변환 실패] {row['original_filename']}: {e}")
+            continue
+
+    if len(writer.pages) == 0:
+        raise HTTPException(status_code=404, detail="변환 가능한 이력서 내용이 없습니다.")
+
+    output = io.BytesIO()
+    writer.write(output)
+    output.seek(0)
+
+    filename = f"masked_resumes_{job_posting_id}.pdf"
+    return StreamingResponse(
+        output,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, no-cache, must-revalidate",  # ← 추가
+            "Pragma": "no-cache",       
+            }
+    )

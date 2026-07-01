@@ -69,6 +69,7 @@ def scrape_job_posting(url):
         "input_type": "url",
         "source_url": url,
         "raw_content": None,
+        "image_content": None,
         "conts_summary": None
         }
 
@@ -94,7 +95,7 @@ def scrape_job_posting(url):
             },
         )
         res.raise_for_status()
-        soup = BeautifulSoup(res.text, "html.parser")
+        soup = BeautifulSoup(res.content, "html.parser", from_encoding="utf-8")
         title = soup.select("h1.tit_job")[0].text.strip()
         result["title"] = title
         # cont = soup.select_one("div.cont")
@@ -125,32 +126,49 @@ def scrape_job_posting(url):
     try:
         res = session.get(detail_url, headers={"referer": url})
         res.raise_for_status()
-        res.encoding = res.apparent_encoding
-        detail_soup = BeautifulSoup(res.text, "html.parser")
+        detail_soup = BeautifulSoup(res.content, "html.parser", from_encoding="utf-8")
 
-        contents = detail_soup.select_one("div.user_content")
-        text1 = contents.select_one("div.job-content") if contents else None
-        text2 = contents.select_one("div.content") if contents else None
-        text3_locator = detail_soup.select_one("body > div > div > div:nth-child(2)")
-        text3_text = text3_locator.get_text(strip=True) if text3_locator else ""
+        # 가능한 텍스트 컨테이너 순서대로 시도
+        SELECTORS = [
+            "div.user_content div.job-content",
+            "div.user_content div.content",
+            "div.user_content",
+            "div#job_detail_description",
+            "div.wrap_jd_cont",
+            "section.jv_cont",
+            "div.jv_cont",
+        ]
+        data = ""
+        contents = None
+        for sel in SELECTORS:
+            node = detail_soup.select_one(sel)
+            if node:
+                text = node.get_text(separator="\n", strip=True).replace("\xa0", " ")
+                if len(text) > len(data):
+                    data = text
+                    contents = node
 
-        if text1:
-            data = text1.get_text(strip=True).replace("\xa0", " ")
-        elif text2:
-            data = text2.get_text(strip=True).replace("\xa0", " ")
-        elif text3_text:
-            data = text3_text.replace("\xa0", " ")
-        else:
-            images = contents.select("img") if contents else []
-            data = []
+        # 텍스트가 충분하지 않으면 이미지 URL 수집
+        if len(data) < 100:
+            img_container = detail_soup.select_one("div.user_content") or detail_soup.body
+            images = img_container.select("img") if img_container else []
+            img_urls = []
             for img in images:
-                src = img.get("src")
+                src = img.get("src") or img.get("data-src")
                 if not src:
                     continue
                 if src.startswith("//"):
                     src = "https:" + src
                 data.append(src)
-        result["raw_content"] = data
+
+        if isinstance(data, list):
+            # 본문이 텍스트가 아니라 이미지로만 구성된 경우: image_content에 URL 목록 저장.
+            # raw_content(추출 텍스트)는 이후 OCR 단계(format_job_posting)에서 채워짐.
+            result["image_content"] = data
+            result["raw_content"] = None
+        else:
+            result["raw_content"] = data
+            result["image_content"] = None
 
     except Exception as e:
         print(f"[view-detail 실패] {rec_idx}: {e}")
