@@ -345,3 +345,41 @@ def update_job_posting_title(job_posting_id: int, req: TitleRequest):
         "success": True,
         "title": req.title,
     }
+
+@router.patch("/job-posting/{job_posting_id}/claim")
+def claim_job_posting(job_posting_id: int, authorization: Optional[str] = Header(None)):
+    """비회원으로 생성된 공고를 로그인한 유저 계정에 연결"""
+    
+    # 1. 토큰에서 user_id 추출
+    user_id = get_user_id_from_header(authorization)
+    
+    if not user_id:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
+    
+    # 2. 공고 조회 (현재 user_id가 null인지 확인)
+    response = (
+        supabase.table("job_postings")
+        .select("id, user_id")
+        .eq("id", job_posting_id)
+        .execute()
+    )
+    
+    if not response.data:
+        raise HTTPException(status_code=404, detail="채용공고를 찾을 수 없습니다.")
+    
+    posting = response.data[0]
+    
+    # 3. 이미 다른 사람 소유면 막기 (안전장치)
+    if posting["user_id"] and posting["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="이미 다른 계정에 연결된 공고입니다.")
+    
+    # 4. user_id가 null일 때만 업데이트
+    if not posting["user_id"]:
+        supabase.table("job_postings").update(
+            {"user_id": user_id}
+        ).eq("id", job_posting_id).execute()
+    
+    return {
+        "success": True,
+        "data": {"job_posting_id": job_posting_id, "user_id": user_id}
+    }
